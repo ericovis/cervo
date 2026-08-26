@@ -1,0 +1,26 @@
+[project]
+name = "cervo"
+version = "0.1.0"
+description = "A demo app for managing static website hosting on a shared VPS"
+readme = "README.md"
+authors = [
+    { name = "Eric Magalhães", email = "eric@plytz.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "fastmcp>=3.4.7",
+    "jinja2>=3.1.6",
+    "python-decouple>=3.8",
+]
+
+[project.scripts]
+cervo = "cervo:main"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.16.4",
+]

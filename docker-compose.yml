@@ -1,0 +1,13 @@
+services:
+  sites:
+    image: caddy:latest
+    ports:
+      - 8080:80
+      - 8443:443
+    volumes:
+      - .data:/mnt/data
+  mail:
+    image: schickling/mailcatcher:latest
+    ports:
+      - 1080:1080
+      - 1025:1025
