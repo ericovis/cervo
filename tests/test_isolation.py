@@ -1,0 +1,45 @@
+"""The guarantees the rest of the suite leans on.
+
+Every test runs against a throwaway database and a fake mail server. If these
+fail, treat results from the other files as suspect.
+"""
+
+from cervo import config, mail
+from cervo.db import connect
+from tests.conftest import OWNER, call, chat
+
+
+def test_the_database_is_a_throwaway(tmp_path):
+    assert config.DATABASE_PATH.parent.parent == tmp_path
+    assert config.DATA_DIR.parent == tmp_path
+
+
+def test_the_development_database_is_never_touched():
+    """The repo's own .data must be nowhere near the configured path."""
+    development = (config.DATA_DIR.parents[-1] / "cervo" / ".data").resolve()
+    assert not config.DATABASE_PATH.is_relative_to(development)
+    assert "Code/cervo/.data" not in str(config.DATABASE_PATH)
+
+
+def test_each_test_gets_an_empty_database():
+    """State cannot leak between tests; the sibling below writes the same row."""
+    with connect() as conn:
+        assert conn.execute("SELECT count(*) c FROM user").fetchone()["c"] == 0
+        conn.execute("INSERT INTO user (email) VALUES (?)", (OWNER,))
+
+
+def test_each_test_gets_an_empty_database_again():
+    with connect() as conn:
+        assert conn.execute("SELECT count(*) c FROM user").fetchone()["c"] == 0
+
+
+def test_smtp_is_never_reached(mailbox):
+    """`mail.send` is replaced, so nothing can open a socket to mailcatcher."""
+    assert mail.send.__name__ == "fake_send"
+    mail.send(to=OWNER, subject="probe", body="code is: 424242")
+    assert mailbox.last_code == "424242"
+
+
+async def test_the_tables_exist_before_a_test_body_runs():
+    async with chat() as c:
+        assert "not signed in" in await call(c, "authentication_status")
