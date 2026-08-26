@@ -95,6 +95,11 @@ agent to re-authenticate.
 uv run pytest
 ```
 
+CI runs the same steps on push to `main` and on every pull request
+(`.github/workflows/test.yml`): `uv sync --locked`, `ruff check`,
+`ruff format --check`, then `pytest`. It starts no services — the suite needs
+neither caddy nor mailcatcher.
+
 Tests never touch development data: an autouse fixture in `tests/conftest.py`
 repoints `config.DATA_DIR` and `config.DATABASE_PATH` at a per-test `tmp_path` and
 creates the tables there, and another replaces `mail.send` with a capture
