@@ -249,4 +249,4 @@ async def test_an_unknown_subdomain_serves_no_site():
         body = _get(f"http://{DOMAIN}/", host=f"{unique('ghost')}.{DOMAIN}")
     except urllib.error.HTTPError:
         return
-    assert "hosted by cervo" not in body
+    assert "live on cervo" not in body
