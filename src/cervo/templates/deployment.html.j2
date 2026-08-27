@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>deploying — cervo</title>
+<style>
+  /* ── cervo design tokens: "deploy receipt" ─────────────────────────
+     Dark is the base; light overrides follow the visitor's OS setting,
+     and [data-theme] (set by the toggle) beats both. Future cervo pages
+     copy this block verbatim — see design-system/cervo-tokens.css. */
+  :root {
+    color-scheme: dark;
+    --bg: #1b1a16; --ink: #f0ead8; --text: #cfc9ba; --muted: #8a8574;
+    --accent: #e5a83c; --rule: #34322b; --dotted: #4a463c; --code-bg: #24221c;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      color-scheme: light;
+      --bg: #f7f3ea; --ink: #2b2820; --text: #4a463c; --muted: #857e6e;
+      --accent: #9a6a1f; --rule: #e2dac8; --dotted: #b8b09c; --code-bg: #efe8d6;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #1b1a16; --ink: #f0ead8; --text: #cfc9ba; --muted: #8a8574;
+    --accent: #e5a83c; --rule: #34322b; --dotted: #4a463c; --code-bg: #24221c;
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #f7f3ea; --ink: #2b2820; --text: #4a463c; --muted: #857e6e;
+    --accent: #9a6a1f; --rule: #e2dac8; --dotted: #b8b09c; --code-bg: #efe8d6;
+  }
+  /* ── base ── */
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 13px; line-height: 1.65;
+  }
+  main { max-width: 640px; margin: 0 auto; padding: 32px 24px 40px; }
+  a { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+  a:hover { color: var(--ink); }
+  /* ── header ── */
+  header { display: flex; justify-content: space-between; align-items: center; }
+  .wordmark { color: var(--ink); font-weight: 700; font-size: 12px; }
+  .tagline { color: var(--muted); font-size: 12px; }
+  /* ── hero ── */
+  .status { margin: 28px 0 0; font-size: 12px; letter-spacing: 0.12em; color: var(--accent); }
+  h1 { font-size: 26px; color: var(--ink); font-weight: 600; margin: 10px 0 14px; overflow-wrap: anywhere; }
+  .intro { margin: 0; color: var(--muted); max-width: 54ch; }
+  /* ── receipt ── */
+  .receipt { margin: 26px 0 0; display: flex; flex-direction: column; gap: 10px; max-width: 480px; }
+  .receipt > div { display: flex; align-items: baseline; gap: 10px; }
+  .receipt dt { color: var(--muted); }
+  .receipt .leader { flex: 1; border-bottom: 1px dotted var(--dotted); }
+  .receipt dd { margin: 0; overflow-wrap: anywhere; }
+  /* ── deploy log ── */
+  .log { margin-top: 26px; border-top: 1px solid var(--rule); padding-top: 18px;
+         display: flex; flex-direction: column; gap: 8px; }
+  .log > div { display: flex; gap: 10px; }
+  .log .caret { color: var(--accent); }
+  .log .line { color: var(--ink); overflow-wrap: anywhere; }
+  .log .line.muted { color: var(--muted); }
+  @media (max-width: 480px) { h1 { font-size: 22px; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="wordmark">cervo</span>
+    <span class="tagline">static hosting</span>
+  </header>
+
+  <p class="status" id="status">&#9679; WORKING</p>
+  <h1 id="host">&hellip;</h1>
+  <p class="intro" id="intro">Your site is being deployed. This page follows along — it is safe to close.</p>
+
+  <dl class="receipt">
+    <div><dt>site</dt><span class="leader"></span><dd id="slug">&hellip;</dd></div>
+    <div><dt>address</dt><span class="leader"></span><dd id="address">&hellip;</dd></div>
+  </dl>
+
+  <div class="log" id="log"></div>
+</main>
+<script type="module">
+  // The MCP Apps bridge: the host pushes the create_website result here,
+  // then the page follows the deployment through the website_status tool.
+  const el = (id) => document.getElementById(id);
+
+  function log(text, muted = false) {
+    const row = document.createElement("div");
+    const caret = document.createElement("span");
+    caret.className = "caret";
+    caret.textContent = ">";
+    const line = document.createElement("span");
+    line.className = muted ? "line muted" : "line";
+    line.textContent = text;
+    row.append(caret, line);
+    el("log").append(row);
+  }
+
+  function show(site) {
+    const host = site.url.replace(/^https?:\/\//, "");
+    el("host").textContent = host;
+    el("slug").textContent = site.slug;
+    el("status").textContent = "● " + site.status.toUpperCase();
+    if (site.status === "live") {
+      el("intro").textContent = "Your site is live. Publish an index.html of your own to replace its default page — just ask.";
+      const link = document.createElement("a");
+      link.href = site.url;
+      link.textContent = site.url;
+      link.target = "_blank";
+      link.rel = "noopener";
+      el("address").replaceChildren(link);
+    } else {
+      el("address").textContent = site.url;
+    }
+  }
+
+  const EVERY_MS = 1500;
+  const AT_MOST = 40; // ~a minute, then the page stops asking
+
+  function parse(result) {
+    const text = result.content?.find((c) => c.type === "text");
+    return text ? JSON.parse(text.text) : null;
+  }
+
+  async function follow(app, site) {
+    const slug = site.slug;
+    let seen = null;
+    for (let tick = 0; tick < AT_MOST; tick++) {
+      if (site) {
+        show(site);
+        if (site.status !== seen) {
+          seen = site.status;
+          if (site.status === "live") {
+            log(`live — ${site.url}`);
+            return;
+          }
+          if (site.status === "failed") {
+            log("deployment failed", true);
+            if (site.error) log(site.error, true);
+            log("asking to create the site again queues a fresh deployment.", true);
+            return;
+          }
+          log(site.status);
+        }
+      }
+      await new Promise((tickOver) => setTimeout(tickOver, EVERY_MS));
+      try {
+        site = parse(
+          await app.callServerTool({
+            name: "website_status",
+            arguments: { slug },
+          })
+        );
+      } catch (e) {} // a missed poll is not a failed deployment
+    }
+    log("still working — check list_websites for the latest.", true);
+  }
+
+  try {
+    const { App } = await import(
+      "https://unpkg.com/@modelcontextprotocol/ext-apps@0.4.0/app-with-deps"
+    );
+    const app = new App({ name: "cervo deployment", version: "1.0.0" });
+    app.ontoolresult = ({ content, isError }) => {
+      const text = content?.find((c) => c.type === "text");
+      if (isError || !text) {
+        el("status").textContent = "● FAILED";
+        if (text) log(text.text, true);
+        return;
+      }
+      follow(app, JSON.parse(text.text));
+    };
+    await app.connect();
+  } catch (e) {
+    el("status").textContent = "● OFFLINE";
+    log("this page follows a deployment when run as an MCP app.", true);
+  }
+</script>
+</body>
+</html>

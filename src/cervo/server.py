@@ -1,5 +1,7 @@
 from fastmcp import Context, FastMCP
+from fastmcp.apps import AppConfig, ResourceCSP
 from fastmcp.exceptions import ToolError
+from jinja2 import Environment, PackageLoader
 from mcp.types import ClientCapabilities, ElicitationCapability
 from pydantic import BaseModel, EmailStr, Field, create_model
 
@@ -8,6 +10,17 @@ from cervo.db import connect
 from cervo.errors import AppError
 
 app = FastMCP("cervo")
+
+_env = Environment(loader=PackageLoader("cervo"), autoescape=True)
+
+# The deployment-progress app: clients that support MCP apps render this UI
+# for create_website's result, and it polls website_status until the site
+# settles. Clients that do not simply read the tool results as usual.
+_DEPLOYMENT_URI = "ui://cervo/deployment.html"
+
+# The websites-overview app: the same idea for list_websites — every site the
+# signed-in user owns, with unsettled deployments followed live.
+_WEBSITES_URI = "ui://cervo/websites.html"
 
 _ELICITATION_REQUIRED = (
     "This client cannot ask the user to confirm an email address, and cervo "
@@ -135,7 +148,7 @@ def authentication_status(ctx: Context) -> str:
     return f"Signed in as {session.email} for another {_remaining(session)}."
 
 
-@app.tool
+@app.tool(app=AppConfig(resource_uri=_DEPLOYMENT_URI))
 def create_website(slug: website.Slug, ctx: Context) -> website.Website:
     """Create a static site owned by the signed-in user.
 
@@ -159,7 +172,7 @@ def create_website(slug: website.Slug, ctx: Context) -> website.Website:
         raise ToolError(str(error)) from error
 
 
-@app.tool
+@app.tool(app=AppConfig(resource_uri=_WEBSITES_URI))
 def list_websites(ctx: Context) -> list[website.Website]:
     """List every site the signed-in user owns.
 
@@ -175,3 +188,43 @@ def list_websites(ctx: Context) -> list[website.Website]:
             return website.for_user(conn, owner)
     except AppError as error:
         raise ToolError(str(error)) from error
+
+
+@app.tool(app=AppConfig(visibility=["app"]))
+def website_status(slug: website.Slug) -> website.Website:
+    """Report a site's deployment state, for the progress UI.
+
+    Only the deployment app calls this — it polls while the page is open.
+    Agents should use list_websites instead, which also proves ownership.
+    """
+    with connect() as conn:
+        site = website.get(conn, slug)
+    if site is None:
+        raise ToolError(f"There is no site with the slug {slug!r}.")
+    return site
+
+
+@app.resource(
+    _DEPLOYMENT_URI,
+    app=AppConfig(csp=ResourceCSP(resource_domains=["https://unpkg.com"])),
+)
+def deployment_view() -> str:
+    """The deployment-progress UI, rendered on cervo's design system.
+
+    All of its data arrives at runtime: the create_website result seeds the
+    page, then it follows the deployment through website_status.
+    """
+    return _env.get_template("deployment.html.j2").render()
+
+
+@app.resource(
+    _WEBSITES_URI,
+    app=AppConfig(csp=ResourceCSP(resource_domains=["https://unpkg.com"])),
+)
+def websites_view() -> str:
+    """The websites-overview UI, rendered on cervo's design system.
+
+    All of its data arrives at runtime: the list_websites result fills the
+    page, and unsettled deployments are followed through website_status.
+    """
+    return _env.get_template("websites.html.j2").render()

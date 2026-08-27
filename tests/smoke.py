@@ -34,6 +34,7 @@ TOOLS = {
     "authentication_status",
     "create_website",
     "list_websites",
+    "website_status",
 }
 
 
@@ -214,6 +215,21 @@ async def test_a_site_is_created_deployed_and_served():
     )
     assert slug in page
     assert "cervo" in page
+
+
+async def test_the_progress_app_can_follow_a_deployment():
+    slug = unique("watched")
+    async with chat() as owner:
+        await sign_in(owner, f"{unique('owner')}@example.com")
+        await owner.call_tool("create_website", {"slug": slug})
+        await wait_for_deployment(owner, slug)
+
+    async with chat() as page:  # the app's poll needs no sign-in
+        result = await page.call_tool("website_status", {"slug": slug})
+
+    site = json.loads(result.content[0].text)
+    assert site["status"] == "live"
+    assert site["url"] == f"http://{slug}.{DOMAIN}"
 
 
 async def test_a_slug_cannot_be_taken_from_its_owner():
