@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Deploy to the VPS: build the image for the server's architecture, push it
+# to Docker Hub (token from 1Password), and run the ansible playbook that
+# configures the server's quadlets and restarts the services.
+#
+# All configuration — image repository, Docker Hub user, 1Password secret
+# references — lives in the gitignored deploy/inventory.yml.
+#
+# Rollback is rerunning the playbook with an older tag:
+#   ansible-playbook -i deploy/inventory.yml deploy/site.yml -e image_tag=<sha>
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+inventory=deploy/inventory.yml
+hostvars="$(ansible-inventory -i "$inventory" --list)"
+var() {
+  python3 -c '
+import json, sys
+
+hostvars = json.load(sys.stdin)["_meta"]["hostvars"]
+host = next(iter(hostvars.values()))
+print(host[sys.argv[1]])
+' "$1" <<<"$hostvars"
+}
+
+repo="$(var image_repo)"
+hub_user="$(var dockerhub_user)"
+hub_token="$(var op_dockerhub_token)"
+sha="$(git rev-parse --short HEAD)"
+
+docker build --platform linux/amd64 -t "$repo:$sha" -t "$repo:latest" .
+op read "$hub_token" | docker login -u "$hub_user" --password-stdin
+docker push "$repo:$sha"
+docker push "$repo:latest"
+
+ansible-playbook -i "$inventory" deploy/site.yml -e "image_tag=$sha"

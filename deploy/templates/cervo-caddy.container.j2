@@ -1,0 +1,28 @@
+# {{ ansible_managed }}
+[Unit]
+Description=cervo — caddy, the front door
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+Image=docker.io/library/caddy:latest
+# The name is the DNS name on the cervo network: the worker reloads config
+# through caddy:2019.
+ContainerName=caddy
+Network=cervo.network
+PublishPort=80:80
+PublishPort=443:443
+Exec=caddy run --config /mnt/data/Caddyfile --adapter caddyfile
+Volume=cervo-data:/mnt/data
+# Certificates and the ACME account live in /data — losing it re-issues
+# every certificate and runs into Let's Encrypt rate limits.
+Volume=caddy-data:/data
+Volume=caddy-config:/config
+
+[Service]
+# On a fresh server caddy restarts until the worker's first heal renders
+# the Caddyfile — the same pattern as development.
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

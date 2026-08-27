@@ -1,0 +1,19 @@
+# {{ ansible_managed }}
+[Unit]
+Description=cervo — the job worker
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+Image={{ image_repo }}:{{ image_tag }}
+Exec=cervo-worker
+ContainerName=worker
+Network=cervo.network
+Volume=cervo-data:/mnt/data
+EnvironmentFile=/etc/cervo/env
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

@@ -27,6 +27,8 @@ def render(sites: list[Website]) -> None:
     """Write the whole Caddyfile for these sites. Idempotent."""
     text = _env.get_template("Caddyfile.j2").render(
         domain=config.DOMAIN,
+        scheme=config.SCHEME,
+        acme_email=config.ACME_EMAIL,
         data_dir=config.DATA_DIR,
         mcp_upstream=config.MCP_UPSTREAM,
         sites=sites,

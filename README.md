@@ -16,6 +16,62 @@ Then open Claude Code in this repo — the server is pre-registered in `.mcp.jso
 
 Development works with zero configuration; settings can be overridden via a `.env` file (see the [configuration table](CLAUDE.md#configuration)).
 
+## Deploying
+
+Production is the same image on a VPS, run by rootful [podman
+quadlets](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html)
+(podman ≥ 4.4 — Debian 13). Deploys run from your machine: `bin/deploy`
+builds the image for `linux/amd64`, pushes it to Docker Hub tagged with the
+git sha, and runs the ansible playbook in `deploy/`, which writes the
+quadlet units and environment, pulls the image, and restarts the services —
+restarting the worker re-renders the Caddyfile, so config changes always
+land. Secrets never live in the repo: the Docker Hub token and SMTP
+password are read from 1Password by the `op` CLI at deploy time.
+
+One-time setup:
+
+1. DNS: an `A` record for the apex and a wildcard `A *` record, both to the
+   server's IP — sites live at `https://{slug}.{domain}`.
+2. 1Password items (vault `cervo`): `docker-hub` with a `token` field, and
+   `smtp` with a `password` field (the `op://` paths are inventory vars, so
+   any layout works).
+3. Create `deploy/inventory.yml` (gitignored — every deploy setting lives
+   here, nothing is hardcoded):
+
+   ```yaml
+   cervo:
+     hosts:
+       cervo-vps:
+         ansible_host: your.server.ip
+         ansible_port: 22
+         ansible_user: debian
+     vars:
+       image_repo: docker.io/you/cervo
+       dockerhub_user: you
+       op_dockerhub_token: op://cervo/docker-hub/token
+       domain: example.com
+       acme_email: you@example.com
+       email_host: smtp.example.com # port-587 STARTTLS provider
+       email_port: 587
+       email_user: your-smtp-user
+       email_from: cervo@example.com # a sender your provider verified
+       op_smtp_password: op://cervo/smtp/password
+   ```
+4. On your machine: `ansible` and `op` installed, `op` signed in, docker
+   logged out is fine — `bin/deploy` logs in itself.
+
+Then every deploy — first and later alike — is:
+
+```bash
+bin/deploy
+```
+
+With `SCHEME=https` (set by the playbook) caddy obtains a certificate per
+hostname from Let's Encrypt and redirects plain http; the first request to
+a fresh site waits a few seconds while its certificate is issued.
+Certificates persist in the `caddy-data` volume, so redeploys never
+re-issue them.
+
 ## Documentation
 
 Detailed information lives in [CLAUDE.md](CLAUDE.md) (also loaded by Claude Code as project context):

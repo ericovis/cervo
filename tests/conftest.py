@@ -35,12 +35,13 @@ def data_dir(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def domain(monkeypatch):
-    """Pin the domain, so URL assertions hold wherever the suite runs.
+    """Pin the domain and scheme, so URL assertions hold wherever it runs.
 
     The test stack sets DOMAIN=caddy for the smoke test's sake; the unit
-    suite never talks to the network, so it always sees the default.
+    suite never talks to the network, so it always sees the defaults.
     """
     monkeypatch.setattr(config, "DOMAIN", "localhost")
+    monkeypatch.setattr(config, "SCHEME", "http")
 
 
 @dataclass

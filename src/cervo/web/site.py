@@ -14,7 +14,7 @@ from cervo.web import layout
 
 def default_page(slug: str, url: str, deployed_at: str) -> str:
     host = url.removeprefix("https://").removeprefix("http://")
-    base = f"http://{config.DOMAIN}"
+    base = config.origin()
     return layout.document(
         f"{host} — live on cervo",
         *layout.hero(

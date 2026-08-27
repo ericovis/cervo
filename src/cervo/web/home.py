@@ -12,7 +12,7 @@ def home_page() -> HTMLResponse:
     with connect() as conn:
         sites = website.live(conn)
 
-    mcp_url = f"http://{config.DOMAIN}/mcp"
+    mcp_url = f"{config.origin()}/mcp"
     return layout.page(
         "cervo — static hosting",
         *layout.hero(

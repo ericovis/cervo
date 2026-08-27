@@ -32,9 +32,12 @@ What actually varies between environments is read from the environment / `.env` 
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DOMAIN` | `localhost` | cervo is served at `http://{DOMAIN}`, sites at `http://{slug}.{DOMAIN}` |
+| `DOMAIN` | `localhost` | cervo is served at `{SCHEME}://{DOMAIN}`, sites at `{SCHEME}://{slug}.{DOMAIN}` |
+| `SCHEME` | `http` | `https` in production: caddy then gets a certificate per hostname (persisted in its `/data` volume) and redirects plain http |
+| `ACME_EMAIL` | *(empty)* | contact caddy registers with Let's Encrypt |
 | `EMAIL_HOST` / `EMAIL_PORT` | `mail` / `1025` | SMTP (the mailcatcher service in dev) |
 | `EMAIL_FROM` | `cervo@localhost` | From address on outgoing mail |
+| `EMAIL_USER` / `EMAIL_PASSWORD` | *(empty)* | set for a real SMTP provider — switches `mail.send` to STARTTLS + login (port 587 shape) |
 | `AUTH_CODE_TTL` | `600` | seconds an emailed sign-in code stays valid |
 | `AUTH_SESSION_TTL` | `14400` | seconds a chat stays signed in (4 hours) |
 
@@ -69,6 +72,13 @@ What actually varies between environments is read from the environment / `.env` 
 - `docker-compose.yml` — the dev environment (see Running);
   `docker-compose.test.yml` — the throwaway test stack (see Tests)
 - `bin/` — the everyday commands: `dev`, `lint`, `test`, `smoke`
+
+## Deploying
+
+`bin/deploy` builds and pushes the image to Docker Hub and runs the ansible
+playbook in `deploy/` against the VPS (podman quadlets, secrets from
+1Password at deploy time). See the README's Deploying section for the
+runbook; `deploy/inventory.yml` is gitignored on purpose.
 
 ## Domains
 

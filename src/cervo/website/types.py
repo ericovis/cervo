@@ -39,4 +39,4 @@ class Website(BaseModel):
     @property
     def url(self) -> str:
         """Where the site is served once its deployment is live."""
-        return f"http://{self.slug}.{config.DOMAIN}"
+        return config.origin(f"{self.slug}.{config.DOMAIN}")

@@ -33,7 +33,7 @@ def docs_page() -> HTMLResponse:
                 "Connect your AI tool — Claude Code, a desktop assistant, "
                 "anything that speaks MCP — to cervo's server:"
             ),
-            layout.endpoint_chip(f"http://{config.DOMAIN}/mcp"),
+            layout.endpoint_chip(f"{config.origin()}/mcp"),
             P(
                 "Ask it to authenticate with cervo. You will be asked to "
                 "confirm your email address, and a six-digit code lands in "
@@ -52,7 +52,7 @@ def docs_page() -> HTMLResponse:
             ),
             P(
                 f"Within seconds the site is live at "
-                f"http://my-cool-site.{config.DOMAIN}, serving a default "
+                f"{config.origin(f'my-cool-site.{config.DOMAIN}')}, serving a default "
                 "page until you publish your own."
             ),
             anchor="getting-started",

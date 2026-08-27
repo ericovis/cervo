@@ -1,0 +1,72 @@
+# Deploy cervo to the VPS: podman quadlets running the image built and
+# pushed by bin/deploy. Secrets are resolved on the control machine via the
+# 1Password CLI (`op`), so only the values travel over SSH.
+#
+#   ansible-playbook -i deploy/inventory.yml deploy/site.yml -e image_tag=<sha>
+
+- name: Deploy cervo
+  hosts: cervo
+  become: true
+
+  tasks:
+    - name: Ensure podman is installed
+      ansible.builtin.apt:
+        name: podman
+        state: present
+        update_cache: true
+
+    - name: Read the podman version
+      ansible.builtin.command: podman --version
+      register: podman_version
+      changed_when: false
+
+    - name: Quadlets need podman 4.4 or newer
+      ansible.builtin.assert:
+        that: podman_version.stdout.split() | last is version("4.4", ">=")
+        fail_msg: >-
+          {{ podman_version.stdout }} cannot run quadlets — Debian 13 ships
+          podman 5; upgrade the host.
+
+    - name: Ensure the config directory exists
+      ansible.builtin.file:
+        path: /etc/cervo
+        state: directory
+        mode: "0755"
+
+    - name: Write the environment file (secrets resolved via op locally)
+      ansible.builtin.template:
+        src: templates/cervo.env.j2
+        dest: /etc/cervo/env
+        mode: "0600"
+
+    - name: Write the quadlet units
+      ansible.builtin.template:
+        src: "templates/{{ item }}.j2"
+        dest: "/etc/containers/systemd/{{ item }}"
+        mode: "0644"
+      loop:
+        - cervo.network
+        - cervo-app.container
+        - cervo-worker.container
+        - cervo-caddy.container
+
+    - name: Reload systemd so the quadlets become services
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    - name: Pull the image being deployed
+      ansible.builtin.command: "podman pull {{ image_repo }}:{{ image_tag }}"
+      register: pull
+      changed_when: "'Copying' in pull.stderr or pull.stdout != ''"
+
+    # Worker first: its startup heal re-renders the Caddyfile from the
+    # database with the freshly deployed template. Caddy after, so it reads
+    # the new file even when the reload API was not up during the heal.
+    - name: Restart the services
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: restarted
+      loop:
+        - cervo-worker.service
+        - cervo-caddy.service
+        - cervo-app.service
