@@ -33,12 +33,19 @@ services:
   # volume: the smoke runner joins this container's network namespace, and a
   # restart while it joins kills the run. The worker's startup heal replaces
   # the stub through the admin API moments later.
+  #
+  # The list command form is load-bearing: a string command is word-split by
+  # compose, which strips printf's backslashes and turns every \n into a
+  # literal "n" — a one-line, unparseable Caddyfile that crash-loops caddy.
+  # A list reaches the shell verbatim, so the newlines survive.
   caddy:
     image: caddy:latest
-    command: >
-      sh -c "test -f /mnt/data/Caddyfile
-      || printf '{\n\tadmin 0.0.0.0:2019\n}\n:80\n' > /mnt/data/Caddyfile;
-      exec caddy run --config /mnt/data/Caddyfile --adapter caddyfile"
+    command:
+      - sh
+      - -c
+      - |
+        test -f /mnt/data/Caddyfile || printf '%s\n' '{' 'admin 0.0.0.0:2019' '}' ':80' > /mnt/data/Caddyfile
+        exec caddy run --config /mnt/data/Caddyfile --adapter caddyfile
     restart: unless-stopped
     volumes:
       - data:/mnt/data
