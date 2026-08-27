@@ -48,6 +48,17 @@ services:
   # A list reaches the shell verbatim, so the newlines survive.
   caddy:
     image: caddy:latest
+    # Unprivileged as in production (the sysctl re-allows :80/:443), state
+    # in /tmp — and started after the worker, whose image seeds the fresh
+    # data volume with the unprivileged owner the stub write needs.
+    user: "1000:1000"
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 80
+    environment:
+      XDG_DATA_HOME: /tmp/caddy
+      XDG_CONFIG_HOME: /tmp/caddy
+    depends_on:
+      - worker
     command:
       - sh
       - -c

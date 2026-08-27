@@ -75,6 +75,25 @@
       register: pull
       changed_when: "'Copying' in pull.stderr or pull.stdout != ''"
 
+    # The containers run unprivileged (uid 1000): data written by earlier
+    # root-run deployments must be handed over before the services restart.
+    - name: The data volume must exist before its ownership can be fixed
+      ansible.builtin.command: podman volume create --ignore cervo-data
+      register: volume_created
+      changed_when: volume_created.stdout != ""
+
+    - name: Read where the data volume lives
+      ansible.builtin.command: !unsafe podman volume inspect --format '{{.Mountpoint}}' cervo-data
+      register: data_volume
+      changed_when: false
+
+    - name: The shared data belongs to the unprivileged container user
+      ansible.builtin.file:
+        path: "{{ data_volume.stdout }}"
+        owner: "1000"
+        group: "1000"
+        recurse: true
+
     # Worker first: its startup heal re-renders the Caddyfile from the
     # database with the freshly deployed template. Caddy after, so it reads
     # the new file even when the reload API was not up during the heal.

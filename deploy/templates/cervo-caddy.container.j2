@@ -10,14 +10,20 @@ Image=docker.io/library/caddy:latest
 # through caddy:2019.
 ContainerName=caddy
 Network=cervo.network
+# Unprivileged inside the container (the host-side publish stays podman's);
+# the sysctl lets it still bind :80/:443 in its namespace.
+User=1000
+Group=1000
+Sysctl=net.ipv4.ip_unprivileged_port_start=80
 PublishPort=80:80
 PublishPort=443:443
 Exec=caddy run --config /mnt/data/Caddyfile --adapter caddyfile
 Volume=cervo-data:/mnt/data
 # Certificates and the ACME account live in /data — losing it re-issues
-# every certificate and runs into Let's Encrypt rate limits.
-Volume=caddy-data:/data
-Volume=caddy-config:/config
+# every certificate and runs into Let's Encrypt rate limits. :U hands the
+# volumes (existing certificates included) to the unprivileged user.
+Volume=caddy-data:/data:U
+Volume=caddy-config:/config:U
 
 [Service]
 # On a fresh server caddy restarts until the worker's first heal renders

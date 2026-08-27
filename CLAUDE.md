@@ -23,6 +23,14 @@ The stack is four services, all sharing the `.data` volume at `/mnt/data`:
 - `caddy` — the front door on ports 80/443. Runs on the generated `/mnt/data/Caddyfile` and serves the sites at `http://{slug}.localhost`. Its unauthenticated admin API (`caddy:2019`) is reachable only on the compose network. On a fresh checkout it restarts until the worker first renders the Caddyfile — that's the `restart: unless-stopped` doing its job, not a bug.
 - `mail` — mailcatcher (SMTP on 1025, web UI at http://localhost:1080). Development mail — the sign-in codes — goes here, not to real SMTP.
 
+Every cervo container runs unprivileged inside: the image bakes in a
+`cervo` user (uid 1000) that owns `/app` and `/mnt/data`, and caddy runs
+as the same uid with a sysctl re-allowing :80/:443 (its dev state goes to
+`/tmp` — certificates only exist in production, where its volumes are
+handed over with `:U`). Host-side, the runtimes still run as root. If a
+`.data` directory written by an older root-run stack refuses writes,
+delete it (dev data is disposable) or chown it to uid 1000.
+
 `./src` (and `./tests`) are bind-mounted into `app` and `worker`, so after changing code run `docker compose restart app` (or `worker`) — no rebuild needed. Rebuild (`docker compose build`) only when dependencies change.
 
 Lint and format with ruff before committing: `bin/lint` (runs `uv run ruff
