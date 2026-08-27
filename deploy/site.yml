@@ -27,6 +27,22 @@
           {{ podman_version.stdout }} cannot run quadlets — Debian 13 ships
           podman 5; upgrade the host.
 
+    # An enabled-but-unused docker sets iptables FORWARD to DROP at boot,
+    # which cuts podman's bridge off from the world in both directions.
+    - name: Keep docker off — it breaks podman networking
+      ansible.builtin.systemd_service:
+        name: docker.service
+        enabled: false
+        state: stopped
+      register: docker_off
+      failed_when:
+        - docker_off is failed
+        - "'Could not find the requested service' not in (docker_off.msg | default(''))"
+
+    - name: Forwarded traffic must not be dropped
+      ansible.builtin.command: iptables -P FORWARD ACCEPT
+      changed_when: false
+
     - name: Ensure the config directory exists
       ansible.builtin.file:
         path: /etc/cervo
