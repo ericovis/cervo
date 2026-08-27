@@ -89,15 +89,19 @@ def _provision_website(payload: dict[str, Any]) -> None:
     site_dir = config.DATA_DIR / slug
     site_dir.mkdir(parents=True, exist_ok=True)
 
-    index = site_dir / "index.html"
-    if not index.exists():
-        index.write_text(
-            web.default_page(
-                slug=slug,
-                url=site.url,
-                deployed_at=site.created_at.strftime("%B %-d, %Y at %H:%M UTC"),
-            )
+    if not (site_dir / "index.html").exists():
+        _write_default_page(site)
+
+
+def _write_default_page(site: website.Website) -> None:
+    """Render the site's default landing page into its directory."""
+    (config.DATA_DIR / site.slug / "index.html").write_text(
+        web.default_page(
+            slug=site.slug,
+            url=site.url,
+            deployed_at=site.created_at.strftime("%B %-d, %Y at %H:%M UTC"),
         )
+    )
 
 
 def _configure_website(payload: dict[str, Any]) -> None:
@@ -163,6 +167,36 @@ def _write_file(payload: dict[str, Any]) -> None:
     target.write_text(content)
 
 
+def _delete_file(payload: dict[str, Any]) -> None:
+    """Delete a file from its site's directory.
+
+    The site is checked again right before deleting — and against the
+    submitting owner's id, because a freed slug may already belong to
+    someone else, whose files must never be touched. A missing file makes
+    a retried step safe; empty folders the deletion leaves behind are
+    pruned, and a deleted index.html gets the default page back in its
+    place — a site never loses its landing page. Caddy's file_server
+    notices with no reload.
+    """
+    slug, path = payload["slug"], payload["path"]
+    with connect() as conn:
+        site = website.get(conn, slug)
+    if site is None or site.user_id != payload["user_id"]:
+        raise job.PermanentError(f"the site {slug!r} was deleted")
+    try:
+        target = website.file_target(slug, path)
+    except website.WebsiteError as error:
+        raise job.PermanentError(str(error)) from error
+    target.unlink(missing_ok=True)
+    root = (config.DATA_DIR / slug).resolve()
+    folder = target.parent
+    while folder != root and folder.is_dir() and not any(folder.iterdir()):
+        folder.rmdir()
+        folder = folder.parent
+    if path == "index.html":
+        _write_default_page(site)
+
+
 def _delete_website(payload: dict[str, Any]) -> None:
     """Stop routing a deleted site and remove its files.
 
@@ -187,6 +221,7 @@ _HANDLERS = {
     website.ACTIVATE_KIND: _activate_website,
     website.DEPLOY_KIND: _deploy_website,
     website.DELETE_KIND: _delete_website,
+    website.DELETE_FILE_KIND: _delete_file,
     website.VALIDATE_FILE_KIND: _validate_file,
     website.WRITE_FILE_KIND: _write_file,
 }
@@ -195,6 +230,7 @@ _HANDLERS = {
 _NEXT = {
     **dict(zip(website.DEPLOY_CHAIN, website.DEPLOY_CHAIN[1:], strict=False)),
     **dict(zip(website.FILE_CHAIN, website.FILE_CHAIN[1:], strict=False)),
+    **dict(zip(website.DELETE_FILE_CHAIN, website.DELETE_FILE_CHAIN[1:], strict=False)),
 }
 
 

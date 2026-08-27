@@ -88,6 +88,17 @@ def _file_progress_message(state: website.FileWrite) -> str:
     return state.step or "working"
 
 
+def _file_deletion_progress_message(state: website.FileDeletion) -> str:
+    """One line saying where the deletion is, for a progress notification."""
+    if state.status == "done":
+        return f"deleted {state.path} from the site"
+    if state.status == "failed":
+        return f"deletion failed: {state.error}"
+    if state.status == "pending":
+        return "queued, waiting for a worker"
+    return state.step or "working"
+
+
 async def _follow[S](
     ctx: Context,
     state: S,
@@ -189,6 +200,42 @@ async def write_file(
 
     return await _follow(
         ctx, state, refresh, _file_progress_message, ("done", "failed")
+    )
+
+
+@app.tool
+async def delete_file(
+    slug: website.Slug,
+    path: website.FilePath,
+    ctx: Context,
+) -> website.FileDeletion:
+    """Delete a file from a site the connected account owns.
+
+    The file at ``path`` — a relative path like "blog/post.html" — is
+    removed and stops being served. Deletion is permanent, though any page
+    can be written again with write_file; deleting index.html is allowed,
+    and the site's default landing page is put back in its place. Only call
+    this once the user has clearly asked for this specific file to be
+    deleted.
+
+    The deletion runs in the background. A call that asked for progress
+    follows along and normally returns the file already "done" — gone from
+    the site. Otherwise it returns status "pending" right away. Report a
+    "failed" status's error to the user: the site was deleted meanwhile.
+    """
+    try:
+        with connect() as conn:
+            owner = _owner(conn)
+            state = website.submit_file_deletion(conn, slug, path, owner)
+    except AppError as error:
+        raise ToolError(str(error)) from error
+
+    def refresh(current: website.FileDeletion) -> website.FileDeletion:
+        with connect() as conn:
+            return website.file_deletion_state(conn, slug, path, owner.id) or current
+
+    return await _follow(
+        ctx, state, refresh, _file_deletion_progress_message, ("done", "failed")
     )
 
 

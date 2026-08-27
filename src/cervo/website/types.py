@@ -81,3 +81,21 @@ class FileWrite(BaseModel):
         """Where the file is served once it is written."""
         site = config.origin(f"{self.slug}.{config.DOMAIN}")
         return f"{site}/{self.path}"
+
+
+class FileDeletion(BaseModel):
+    """A file submitted for deletion from a site, and how that work stands.
+
+    Like a write, the deletion runs as a chain of jobs; ``status``,
+    ``error``, and the step fields describe the latest job of that chain,
+    filled in by the service whenever the state is read. There is no url:
+    nothing is served afterwards.
+    """
+
+    slug: Slug
+    path: FilePath
+    status: FileStatus = "pending"
+    error: str | None = None
+    step: str | None = None
+    steps_done: int = 0
+    steps_total: int = 0

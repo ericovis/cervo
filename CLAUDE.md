@@ -181,6 +181,16 @@ safe join, used by both server and worker). Validation failures raise
 server picks new files up immediately. A future virus-scan step is one more
 entry in `FILE_CHAIN`.
 
+Deleting a file (`delete_file`, owner-only) is a single-job chain
+(`website.delete_file`): the tool checks ownership, the path, and that the
+file actually exists, then queues the removal. The payload carries the
+owner's id, and the worker re-checks the site against it before touching
+disk — a slug freed and re-taken meanwhile makes the job a
+`job.PermanentError`, never a deleted file for the new owner. Folders the
+deletion empties are pruned; deleting index.html puts the default landing
+page back in its place, so a site never loses its root. No caddy step, same
+as writing.
+
 Deleting a website (`delete_website`, owner-only) is the mirror image: the
 row is deleted immediately — the slug frees up and the site stops being
 listed — and a `website.delete` job has the worker re-render the Caddyfile

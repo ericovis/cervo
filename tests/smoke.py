@@ -37,6 +37,7 @@ CALLBACK = "http://localhost:33418/callback"
 TOOLS = {
     "create_website",
     "write_file",
+    "delete_file",
     "list_websites",
     "delete_website",
     "website_status",
@@ -293,12 +294,28 @@ async def test_a_written_file_is_served():
                 {"slug": slug, "path": "script.js", "content": content},
             )
 
-    page = _wait_for(
-        lambda: _get(f"http://{DOMAIN}/blog/post.html", host=f"{slug}.{DOMAIN}"),
-        "the written file to be served",
-        timeout=15,
-    )
-    assert "written by hand" in page
+        page = _wait_for(
+            lambda: _get(f"http://{DOMAIN}/blog/post.html", host=f"{slug}.{DOMAIN}"),
+            "the written file to be served",
+            timeout=15,
+        )
+        assert "written by hand" in page
+
+        result = await client.call_tool(
+            "delete_file", {"slug": slug, "path": "blog/post.html"}
+        )
+        deletion = result.structured_content
+        assert deletion["status"] in ("done", "pending"), deletion
+
+    def file_gone() -> None:
+        try:
+            _get(f"http://{DOMAIN}/blog/post.html", host=f"{slug}.{DOMAIN}")
+        except urllib.error.HTTPError as error:
+            assert error.code == 404
+            return
+        raise AssertionError("the deleted file is still being served")
+
+    _wait_for(file_gone, "the deleted file to stop being served", timeout=15)
 
 
 async def test_a_followed_creation_reports_progress_and_returns_live():

@@ -14,7 +14,7 @@ from cervo import config, job
 from cervo.errors import AppError
 from cervo.user.types import User
 from cervo.website import _dao
-from cervo.website.types import FileWrite, Website, WebsiteStatus
+from cervo.website.types import FileDeletion, FileWrite, Website, WebsiteStatus
 
 DELETE_KIND = "website.delete"
 
@@ -48,6 +48,13 @@ _FILE_STEP_LABELS = {
     VALIDATE_FILE_KIND: "checking the file's content",
     WRITE_FILE_KIND: "writing the file",
 }
+
+# Deleting a file is a single-job chain on purpose: a future step (say,
+# purging a cache) is one more entry here rather than new machinery.
+DELETE_FILE_KIND = "website.delete_file"
+DELETE_FILE_CHAIN = (DELETE_FILE_KIND,)
+
+_DELETE_FILE_STEP_LABELS = {DELETE_FILE_KIND: "deleting the file"}
 
 MAX_FILE_BYTES = 1024 * 1024
 _ALLOWED_SUFFIXES = frozenset({".html", ".css"})
@@ -197,6 +204,48 @@ def file_state(
     return _file_write(slug, path, link) if link else None
 
 
+def submit_file_deletion(
+    conn: sqlite3.Connection, slug: str, path: str, owner: User
+) -> FileDeletion:
+    """Queue deleting the file at ``path`` from ``owner``'s site.
+
+    The site must be the owner's, the path a safe relative
+    ``.html``/``.css`` path, and the file must actually exist; each failure
+    raises right here. The removal itself runs as a worker job — carrying
+    the owner's id, so a slug freed and re-taken meanwhile never costs
+    someone else a file — and an identical deletion already in flight is
+    returned instead of being queued twice.
+    """
+    site = _dao.get(conn, slug)
+    if site is None:
+        raise WebsiteError(f"There is no site with the slug {slug!r}.")
+    if site.user_id != owner.id:
+        raise WebsiteError(f"The site {slug!r} belongs to someone else.")
+    if not file_target(slug, path).is_file():
+        raise WebsiteError(f"There is no file at {path!r} in {slug!r}.")
+
+    payload = {"slug": slug, "path": path, "user_id": owner.id}
+    current = job.latest_of(conn, DELETE_FILE_CHAIN, payload)
+    if current is not None and current.status in ("pending", "running"):
+        return _file_deletion(slug, path, current)
+    job.enqueue(conn, DELETE_FILE_CHAIN[0], payload)
+    return FileDeletion(
+        slug=slug,
+        path=path,
+        step=_DELETE_FILE_STEP_LABELS[DELETE_FILE_CHAIN[0]],
+        steps_total=len(DELETE_FILE_CHAIN),
+    )
+
+
+def file_deletion_state(
+    conn: sqlite3.Connection, slug: str, path: str, user_id: int
+) -> FileDeletion | None:
+    """The state of the newest chain deleting exactly this file, if any."""
+    payload = {"slug": slug, "path": path, "user_id": user_id}
+    link = job.latest_of(conn, DELETE_FILE_CHAIN, payload)
+    return _file_deletion(slug, path, link) if link else None
+
+
 def file_target(slug: str, path: str) -> Path:
     """The absolute location ``path`` names inside the site's directory.
 
@@ -307,6 +356,12 @@ def _check_css(content: str) -> None:
             if not char.isspace():
                 meaningful = True
         index += 1
+
+
+def _file_deletion(slug: str, path: str, link: job.Job) -> FileDeletion:
+    """The file deletion ``link`` is the newest job of, with its chain state."""
+    state = _chain_state(DELETE_FILE_CHAIN, _DELETE_FILE_STEP_LABELS, link)
+    return FileDeletion(slug=slug, path=path, **state)
 
 
 def _file_write(slug: str, path: str, link: job.Job) -> FileWrite:
