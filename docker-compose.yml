@@ -1,9 +1,28 @@
 services:
-  sites:
+  app:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - .data:/mnt/data
+      - ./src:/app/src
+    depends_on:
+      - worker
+      - caddy
+      - mail
+  worker:
+    build: .
+    command: cervo-worker
+    restart: unless-stopped
+    volumes:
+      - .data:/mnt/data
+      - ./src:/app/src
+  caddy:
     image: caddy:latest
+    command: caddy run --config /mnt/data/Caddyfile --adapter caddyfile
+    restart: unless-stopped
     ports:
-      - 8080:80
-      - 8443:443
+      - 80:80
+      - 443:443
     volumes:
       - .data:/mnt/data
   mail:
