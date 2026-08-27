@@ -132,19 +132,22 @@
     for (let tick = 0; tick < AT_MOST; tick++) {
       if (site) {
         show(site);
-        if (site.status !== seen) {
-          seen = site.status;
+        const mark = `${site.status}:${site.step ?? ""}`;
+        if (mark !== seen) {
+          seen = mark;
           if (site.status === "live") {
             log(`live — ${site.url}`);
             return;
           }
           if (site.status === "failed") {
-            log("deployment failed", true);
+            log(site.step ? `failed while ${site.step}` : "deployment failed", true);
             if (site.error) log(site.error, true);
             log("asking to create the site again queues a fresh deployment.", true);
             return;
           }
-          log(site.status);
+          log(site.step
+            ? `${site.step} (${site.steps_done + 1}/${site.steps_total})`
+            : site.status);
         }
       }
       await new Promise((tickOver) => setTimeout(tickOver, EVERY_MS));

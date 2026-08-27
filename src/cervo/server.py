@@ -1,3 +1,6 @@
+import asyncio
+from time import monotonic
+
 from fastmcp import Context, FastMCP
 from fastmcp.apps import AppConfig, ResourceCSP
 from fastmcp.exceptions import ToolError
@@ -21,6 +24,11 @@ _DEPLOYMENT_URI = "ui://cervo/deployment.html"
 # The websites-overview app: the same idea for list_websites — every site the
 # signed-in user owns, with unsettled deployments followed live.
 _WEBSITES_URI = "ui://cervo/websites.html"
+
+# Following a deployment from create_website: how often to look, and for how
+# long before handing off to list_websites (the deployment runs on either way).
+_FOLLOW_POLL = 0.5  # seconds
+_FOLLOW_FOR = 30  # seconds
 
 _ELICITATION_REQUIRED = (
     "This client cannot ask the user to confirm an email address, and cervo "
@@ -148,28 +156,76 @@ def authentication_status(ctx: Context) -> str:
     return f"Signed in as {session.email} for another {_remaining(session)}."
 
 
+def _wants_progress(ctx: Context) -> bool:
+    """Whether the client sent a progress token with this call."""
+    meta = ctx.request_context.meta if ctx.request_context else None
+    return meta is not None and meta.progressToken is not None
+
+
+def _progress_message(site: website.Website) -> str:
+    """One line saying where the deployment is, for a progress notification."""
+    if site.status == "live":
+        return f"live at {site.url}"
+    if site.status == "failed":
+        return f"deployment failed: {site.error}"
+    if site.status == "pending":
+        return "queued, waiting for a worker"
+    return site.step or "deploying"
+
+
+async def _follow_deployment(ctx: Context, site: website.Website) -> website.Website:
+    """Follow the deployment chain, reporting each step as progress.
+
+    Only when a progress token came with the call (most clients send one by
+    default) — without it the reports would vanish, so the tool returns
+    immediately and the deployment app (or list_websites) follows instead.
+    Either way the worker keeps going: this only watches, for at most
+    ``_FOLLOW_FOR`` seconds, then hands back whatever state the site is in.
+    """
+    if not _wants_progress(ctx):
+        return site
+    deadline = monotonic() + _FOLLOW_FOR
+    reported = None
+    while True:
+        state = (site.steps_done, site.status)
+        if state != reported:
+            reported = state
+            await ctx.report_progress(
+                progress=site.steps_done,
+                total=site.steps_total or None,
+                message=_progress_message(site),
+            )
+        if site.status in ("live", "failed") or monotonic() >= deadline:
+            return site
+        await asyncio.sleep(_FOLLOW_POLL)
+        with connect() as conn:
+            site = website.get(conn, site.slug) or site  # deleted mid-watch
+
+
 @app.tool(app=AppConfig(resource_uri=_DEPLOYMENT_URI))
-def create_website(slug: website.Slug, ctx: Context) -> website.Website:
+async def create_website(slug: website.Slug, ctx: Context) -> website.Website:
     """Create a static site owned by the signed-in user.
 
     Requires this chat to be signed in — the owner is taken from the session,
     never from an argument. If it is not, or the session has expired, this
     fails with instructions to call authenticate; do that and then retry.
 
-    Creation queues a deployment job that a worker runs in the background:
-    the returned site starts as status "pending" and is normally "live" at
-    its url within seconds — check list_websites for progress, and report a
-    "failed" status's error to the user. Deployments retry on their own, but
-    calling this again with the slug of your own failed site queues a fresh
-    deployment.
+    Creation queues a deployment that a worker runs step by step in the
+    background. A call that asked for progress follows along — each step is
+    reported as it happens — and normally returns the site already "live" at
+    its url. Otherwise the site is returned as status "pending" right away;
+    check list_websites for progress. Report a "failed" status's error to
+    the user. Deployments retry on their own, but calling this again with
+    the slug of your own failed site queues a fresh deployment.
     """
     try:
         with connect() as conn:
             session = auth.require(conn, ctx.session_id)
             owner = user.ensure(conn, session.email)
-            return website.create(conn, slug, owner)
+            site = website.create(conn, slug, owner)
     except AppError as error:
         raise ToolError(str(error)) from error
+    return await _follow_deployment(ctx, site)
 
 
 @app.tool(app=AppConfig(resource_uri=_WEBSITES_URI))

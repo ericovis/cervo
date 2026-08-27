@@ -1,6 +1,13 @@
-"""The worker deploying and deleting sites: files, Caddyfile, reloads, retries."""
+"""The worker deploying and deleting sites: files, Caddyfile, reloads, retries.
 
-from cervo import caddy, user, website, worker
+A deployment is a chain of three jobs — provision, configure, activate — so
+``deploy()`` runs three jobs for a fresh site, and a failed step retries
+alone.
+"""
+
+import asyncio
+
+from cervo import caddy, server, user, website, worker
 from cervo.db import connect
 from tests.conftest import OWNER, call, chat, deploy, sign_in
 
@@ -22,9 +29,14 @@ def test_the_worker_is_idle_with_nothing_queued():
     assert deploy() == 0
 
 
+def site_of(slug: str) -> website.Website:
+    with connect() as conn:
+        return website.get(conn, slug)
+
+
 def test_a_deployment_provisions_the_site(data_dir, caddy_reloads):
     created("mysite")
-    assert deploy() == 1
+    assert deploy() == 3  # provision, configure, activate
 
     page = (data_dir / "mysite" / "index.html").read_text()
     assert "mysite" in page
@@ -42,6 +54,33 @@ def test_a_deployment_provisions_the_site(data_dir, caddy_reloads):
 
     assert caddy_reloads == [True]
     assert status_of("mysite") == ("live", None)
+
+
+def test_a_deployment_advances_one_step_at_a_time(data_dir, caddy_reloads):
+    created("stepwise")
+    site = site_of("stepwise")
+    assert (site.status, site.steps_done, site.steps_total) == ("pending", 0, 3)
+    assert site.step == "writing the site's files"
+
+    assert worker.run_once()  # provision
+    site = site_of("stepwise")
+    assert (site.status, site.steps_done) == ("deploying", 1)
+    assert site.step == "updating the web server config"
+    assert (data_dir / "stepwise" / "index.html").exists()
+    assert not (data_dir / "Caddyfile").exists()
+
+    assert worker.run_once()  # configure
+    site = site_of("stepwise")
+    assert (site.status, site.steps_done) == ("deploying", 2)
+    assert site.step == "routing traffic to the site"
+    assert (data_dir / "Caddyfile").exists()
+    assert caddy_reloads == []
+
+    assert worker.run_once()  # activate
+    site = site_of("stepwise")
+    assert (site.status, site.step, site.steps_done) == ("live", None, 3)
+    assert caddy_reloads == [True]
+    assert not worker.run_once()
 
 
 def test_the_caddyfile_covers_every_site(data_dir):
@@ -62,7 +101,7 @@ def test_a_redeployment_keeps_the_owners_files(data_dir):
     with connect() as conn:  # force the failed-deployment path, then redeploy
         conn.execute("UPDATE job SET status = 'failed'")
     created("kept")
-    assert deploy() == 1
+    assert deploy() == 3
 
     assert (data_dir / "kept" / "index.html").read_text() == "the owner's own page"
     assert status_of("kept") == ("live", None)
@@ -74,11 +113,12 @@ def test_a_failed_deployment_records_the_error_and_retries(monkeypatch):
 
     monkeypatch.setattr(caddy, "reload", refuse)
     created("unlucky")
-    assert deploy() == 1
+    assert deploy() == 3  # only the last step fails
 
     status, error = status_of("unlucky")
-    assert status == "pending"  # queued for another attempt
+    assert status == "deploying"  # the failed step is queued for another attempt
     assert error == "caddy is down"
+    assert site_of("unlucky").step == "routing traffic to the site"
 
     assert deploy() == 0  # the retry delay has not passed yet
 
@@ -91,7 +131,7 @@ def test_a_recovered_deployment_goes_live_on_retry(monkeypatch, caddy_reloads):
     monkeypatch.setattr(caddy, "reload", lambda: caddy_reloads.append(True))
     with connect() as conn:  # skip the retry delay, the way waiting would
         conn.execute("UPDATE job SET next_attempt_at = 0")
-    assert deploy() == 1
+    assert deploy() == 1  # only the failed step reruns, not the whole chain
     assert status_of("recovers") == ("live", None)
 
 
@@ -121,6 +161,47 @@ def test_healing_renders_and_reloads_without_jobs(data_dir, caddy_reloads):
 
     assert "http://already-there.localhost {" in (data_dir / "Caddyfile").read_text()
     assert caddy_reloads == [True]
+
+
+async def test_a_followed_creation_streams_progress(mailbox, monkeypatch):
+    """A client that sends a progress token sees each step and gets 'live'."""
+    monkeypatch.setattr(server, "_FOLLOW_POLL", 0.02)
+    monkeypatch.setattr(server, "_FOLLOW_FOR", 30)
+    updates = []
+
+    async def on_progress(progress, total, message):
+        updates.append((progress, total, message))
+
+    async def pump():  # the worker service, one job at a time
+        while True:
+            await asyncio.sleep(0.05)
+            await asyncio.to_thread(worker.run_once)
+
+    async with chat() as c:
+        await sign_in(c, mailbox)
+        pumping = asyncio.create_task(pump())
+        try:
+            result = await c.call_tool(
+                "create_website", {"slug": "followed"}, progress_handler=on_progress
+            )
+        finally:
+            pumping.cancel()
+
+    site = result.structured_content
+    assert site["status"] == "live"
+    steps = [progress for progress, _, _ in updates]
+    assert steps[0] == 0 and steps[-1] == 3
+    assert steps == sorted(steps)
+    assert all(total == 3 for _, total, _ in updates)
+    assert updates[-1][2] == "live at http://followed.localhost"
+
+
+async def test_a_creation_that_outlasts_the_follow_window_hands_off(mailbox):
+    """The tool never waits past its window: the site comes back pending."""
+    async with chat() as c:  # conftest pins the window to zero
+        await sign_in(c, mailbox)
+        result = await c.call_tool("create_website", {"slug": "unwatched"})
+    assert result.structured_content["status"] == "pending"
 
 
 async def test_an_agent_watches_a_site_go_live(mailbox):

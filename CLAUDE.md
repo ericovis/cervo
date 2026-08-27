@@ -115,12 +115,25 @@ and payload serialization never leave its `_dao`.
 
 ## Jobs and deployment
 
-Creating a website inserts the row and enqueues a `website.deploy` job — the MCP
-server never provisions anything itself. The worker claims due jobs and runs the
-deployment: create `DATA_DIR/{slug}/`, write the default `index.html` (only if
-missing — an owner's replaced files are never clobbered), regenerate the whole
-Caddyfile from the database, and POST it to caddy's `/load` admin endpoint. Every
-step is idempotent, so retrying is always safe.
+Creating a website inserts the row and enqueues the first job of the deploy
+chain — the MCP server never provisions anything itself. A deployment is three
+chained jobs, and the worker enqueues each next one in the same transaction
+that marks its predecessor done: `website.provision` creates `DATA_DIR/{slug}/`
+and writes the default `index.html` (only if missing — an owner's replaced
+files are never clobbered), `website.configure` regenerates the whole Caddyfile
+from the database, and `website.activate` POSTs it to caddy's `/load` admin
+endpoint. Every step is idempotent, so retrying is always safe — and only the
+failed step retries, not the whole chain. Rows with the legacy single-job kind
+`website.deploy` (from before the chain) are still read and handled, so old
+sites keep their status.
+
+Because the deployment is now stepwise, a site also reports `step`,
+`steps_done`, and `steps_total`, and `create_website` streams real-time
+progress: when the client sent a `progressToken`, the tool follows the chain
+with `ctx.report_progress` (one notification per step) and returns the site
+already `live` (or `failed`); without a token it returns immediately as
+status `pending`, and the deployment MCP app or `list_websites` follows
+instead.
 
 Job lifecycle: `pending → running → done`, or on failure back to `pending` with
 `attempts + 1` and a retry delay, until `failed` for good after `_MAX_ATTEMPTS`.
@@ -135,8 +148,9 @@ row is deleted immediately — the slug frees up and the site stops being
 listed — and a `website.delete` job has the worker re-render the Caddyfile
 (dropping the route) and then remove `DATA_DIR/{slug}/`.
 
-A site's `status`/`error` shown by the tools is its latest deploy job's state
-(`running` reads as `deploying`, `done` as `live`). Calling `create_website` on
+A site's `status`/`error` shown by the tools comes from the latest job of its
+deploy chain (mid-chain reads as `deploying`; the final job's `done` as
+`live`). Calling `create_website` on
 your own failed site queues a fresh deployment; the slug `caddyfile` is reserved
 (it would collide with `DATA_DIR/Caddyfile` on case-insensitive filesystems).
 

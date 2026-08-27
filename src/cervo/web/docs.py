@@ -76,11 +76,11 @@ def docs_page() -> HTMLResponse:
         layout.section(
             "HOW DEPLOYMENTS WORK",
             P(
-                "Creating a website queues a deployment job — the chat "
-                "answers immediately, and a background worker does the "
-                "provisioning: it creates the site's directory, writes the "
-                "default page if none exists, regenerates the web server's "
-                "configuration from the database, and reloads it."
+                "Creating a website queues a deployment, which a background "
+                "worker runs as a chain of steps the chat can follow in "
+                "real time: create the site's directory and write the "
+                "default page if none exists, regenerate the web server's "
+                "configuration from the database, and reload it."
             ),
             P(
                 "A deployment's status runs pending, then deploying, then "

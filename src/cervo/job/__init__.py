@@ -10,6 +10,7 @@ from cervo.job.service import (
     enqueue,
     fail,
     latest,
+    latest_of,
     reap,
     succeed,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "enqueue",
     "fail",
     "latest",
+    "latest_of",
     "reap",
     "succeed",
 ]

@@ -7,6 +7,7 @@ this is also the crash recovery.
 """
 
 import sqlite3
+from collections.abc import Sequence
 from typing import Any
 
 from cervo.job import _dao
@@ -55,3 +56,14 @@ def reap(conn: sqlite3.Connection) -> int:
 def latest(conn: sqlite3.Connection, kind: str, payload: dict[str, Any]) -> Job | None:
     """The current state of this piece of work, if it was ever queued."""
     return _dao.latest(conn, kind, payload)
+
+
+def latest_of(
+    conn: sqlite3.Connection, kinds: Sequence[str], payload: dict[str, Any]
+) -> Job | None:
+    """The newest job among ``kinds`` for this payload, if any was queued.
+
+    For work that runs as a chain of jobs: the newest row says how far the
+    chain has come.
+    """
+    return _dao.latest_of(conn, kinds, payload)

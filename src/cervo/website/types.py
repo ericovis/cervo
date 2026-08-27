@@ -23,9 +23,11 @@ WebsiteStatus = Literal["pending", "deploying", "live", "failed"]
 class Website(BaseModel):
     """A static website hosted on the VPS, owned by exactly one user.
 
-    ``status`` and ``error`` are not stored on the site: they describe its
-    latest deployment job, and the service fills them in when it reads a
-    site out of the database.
+    ``status``, ``error``, and the step fields are not stored on the site:
+    they describe its latest deployment job, and the service fills them in
+    when it reads a site out of the database. A deployment is a chain of
+    jobs, so ``step`` names what is happening right now and ``steps_done``
+    of ``steps_total`` says how far along it is.
     """
 
     slug: Slug
@@ -34,6 +36,9 @@ class Website(BaseModel):
     updated_at: datetime
     status: WebsiteStatus = "pending"
     error: str | None = None
+    step: str | None = None
+    steps_done: int = 0
+    steps_total: int = 0
 
     @computed_field
     @property

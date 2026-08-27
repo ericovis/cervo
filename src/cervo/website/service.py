@@ -1,8 +1,9 @@
 """Creating, listing, and deleting sites, on behalf of the user who owns them.
 
-Creating a site writes the row and queues a deployment job; the worker
-process does the provisioning. A site's ``status`` and ``error`` therefore
-come from its latest deployment job, attached here whenever a site is read.
+Creating a site writes the row and queues the first job of the deployment
+chain; the worker process does the provisioning, one step per job. A site's
+``status``, ``error``, and step fields therefore come from its latest
+deployment job, attached here whenever a site is read.
 """
 
 import sqlite3
@@ -13,14 +14,33 @@ from cervo.user.types import User
 from cervo.website import _dao
 from cervo.website.types import Website, WebsiteStatus
 
-DEPLOY_KIND = "website.deploy"
 DELETE_KIND = "website.delete"
+
+# A deployment is a chain of jobs: each one's success has the worker enqueue
+# the next, so a site's progress is visible one step at a time.
+PROVISION_KIND = "website.provision"
+CONFIGURE_KIND = "website.configure"
+ACTIVATE_KIND = "website.activate"
+DEPLOY_CHAIN = (PROVISION_KIND, CONFIGURE_KIND, ACTIVATE_KIND)
+
+# Deployments queued before the chain existed ran as this single job; rows
+# with this kind still exist, so reading them keeps old sites' status right.
+DEPLOY_KIND = "website.deploy"
+
+_ALL_DEPLOY_KINDS = (*DEPLOY_CHAIN, DEPLOY_KIND)
+
+# What each step of the chain is doing, in words fit for a progress report.
+_STEP_LABELS = {
+    PROVISION_KIND: "writing the site's files",
+    CONFIGURE_KIND: "updating the web server config",
+    ACTIVATE_KIND: "routing traffic to the site",
+}
 
 # DATA_DIR/caddyfile would collide with the rendered DATA_DIR/Caddyfile on a
 # case-insensitive filesystem (macOS development).
 _RESERVED = frozenset({"caddyfile"})
 
-# How a deployment job's status reads as a site's status.
+# How a legacy single-job deployment's status reads as a site's status.
 _STATUS: dict[str, WebsiteStatus] = {
     "pending": "pending",
     "running": "deploying",
@@ -51,16 +71,17 @@ def create(conn: sqlite3.Connection, slug: str, owner: User) -> Website:
     existing = _dao.get(conn, slug)
     if existing is None:
         site = _dao.upsert(conn, slug, owner.id)
-        job.enqueue(conn, DEPLOY_KIND, {"slug": slug})
+        job.enqueue(conn, DEPLOY_CHAIN[0], {"slug": slug})
         return _with_deployment(conn, site)
     if existing.user_id != owner.id:
         raise WebsiteError(f"The slug {slug!r} is already taken.")
 
-    deployment = job.latest(conn, DEPLOY_KIND, {"slug": slug})
+    deployment = job.latest_of(conn, _ALL_DEPLOY_KINDS, {"slug": slug})
     if deployment is None or deployment.status == "failed":
-        job.enqueue(conn, DEPLOY_KIND, {"slug": slug})
+        job.enqueue(conn, DEPLOY_CHAIN[0], {"slug": slug})
         return _with_deployment(conn, existing)
-    if deployment.status == "done":
+    site = existing.model_copy(update=_deployment_state(deployment))
+    if site.status == "live":
         raise WebsiteError(f"You already own {slug!r}, and it is live.")
     raise WebsiteError(f"You already own {slug!r}; its deployment is in progress.")
 
@@ -110,10 +131,40 @@ def exists(conn: sqlite3.Connection, slug: str) -> bool:
 
 
 def _with_deployment(conn: sqlite3.Connection, site: Website) -> Website:
-    """The site with the status and error of its latest deployment job."""
-    deployment = job.latest(conn, DEPLOY_KIND, {"slug": site.slug})
+    """The site carrying the state of its latest deployment job."""
+    deployment = job.latest_of(conn, _ALL_DEPLOY_KINDS, {"slug": site.slug})
     if deployment is None:
         return site
-    return site.model_copy(
-        update={"status": _STATUS[deployment.status], "error": deployment.error}
-    )
+    return site.model_copy(update=_deployment_state(deployment))
+
+
+def _deployment_state(deployment: job.Job) -> dict:
+    """How a deployment job reads as a site's status, error, and step.
+
+    A chain job also says how far along the pipeline the site is; a legacy
+    single-job deployment is all-or-nothing. A chain job marked done is a
+    moment the worker's transaction makes invisible — the next step is
+    enqueued as the previous one succeeds — but it is still mapped, not
+    trusted to never surface.
+    """
+    total = len(DEPLOY_CHAIN)
+    state: dict = {"error": deployment.error, "steps_total": total, "step": None}
+    if deployment.kind == DEPLOY_KIND:
+        status = _STATUS[deployment.status]
+        done = total if status == "live" else 0
+        return {**state, "status": status, "steps_done": done}
+
+    index = DEPLOY_CHAIN.index(deployment.kind)
+    if deployment.status == "done":
+        if index == total - 1:
+            return {**state, "status": "live", "steps_done": total}
+        next_kind = DEPLOY_CHAIN[index + 1]
+        state |= {"step": _STEP_LABELS[next_kind], "steps_done": index + 1}
+        return {**state, "status": "deploying"}
+
+    state |= {"step": _STEP_LABELS[deployment.kind], "steps_done": index}
+    if deployment.status == "failed":
+        return {**state, "status": "failed"}
+    if deployment.status == "pending" and index == 0:
+        return {**state, "status": "pending"}
+    return {**state, "status": "deploying"}

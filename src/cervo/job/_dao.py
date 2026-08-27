@@ -11,6 +11,7 @@ yet?", "timed out?" — stays in SQL. The payload is stored as canonical JSON
 
 import json
 import sqlite3
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -101,6 +102,14 @@ ORDER BY id DESC
 LIMIT 1
 """
 
+# The IN () placeholders are filled per call — the number of kinds varies.
+_LATEST_OF = """
+SELECT * FROM job
+WHERE kind IN ({placeholders}) AND payload = ?
+ORDER BY id DESC
+LIMIT 1
+"""
+
 
 def _now() -> float:
     return datetime.now(UTC).timestamp()
@@ -179,4 +188,13 @@ def reap(conn: sqlite3.Connection, max_attempts: int, retry_delay: int) -> int:
 def latest(conn: sqlite3.Connection, kind: str, payload: dict[str, Any]) -> Job | None:
     """The newest job for exactly this kind and payload, if any."""
     row = conn.execute(_LATEST, (kind, _serialize(payload))).fetchone()
+    return _from_row(row) if row else None
+
+
+def latest_of(
+    conn: sqlite3.Connection, kinds: Sequence[str], payload: dict[str, Any]
+) -> Job | None:
+    """The newest job among ``kinds`` for exactly this payload, if any."""
+    query = _LATEST_OF.format(placeholders=",".join("?" * len(kinds)))
+    row = conn.execute(query, (*kinds, _serialize(payload))).fetchone()
     return _from_row(row) if row else None

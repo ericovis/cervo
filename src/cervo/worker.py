@@ -62,21 +62,23 @@ def run_once() -> bool:
             job.fail(conn, claimed.id, str(error))
     else:
         _log.info("job %d (%s) done", claimed.id, claimed.kind)
-        with connect() as conn:
+        with connect() as conn:  # one transaction: a done step and its successor
             job.succeed(conn, claimed.id)
+            follow_up = _NEXT.get(claimed.kind)
+            if follow_up:
+                job.enqueue(conn, follow_up, claimed.payload)
     return True
 
 
-def _deploy_website(payload: dict[str, Any]) -> None:
-    """Provision a site's directory and route traffic to it.
+def _provision_website(payload: dict[str, Any]) -> None:
+    """Create the site's directory and its default page.
 
-    Every step is idempotent, so a retried deployment is safe — including
-    the default page, written only if the owner has not replaced it.
+    Idempotent, so a retried step is safe: the default page is written only
+    if the owner has not replaced it with their own.
     """
     slug = payload["slug"]
     with connect() as conn:
         site = website.get(conn, slug)
-        sites = website.all_sites(conn)
     if site is None:
         raise RuntimeError(f"no website row for slug {slug!r}")
 
@@ -93,8 +95,24 @@ def _deploy_website(payload: dict[str, Any]) -> None:
             )
         )
 
+
+def _configure_website(payload: dict[str, Any]) -> None:
+    """Render the Caddyfile from the database, covering every site."""
+    with connect() as conn:
+        sites = website.all_sites(conn)
     caddy.render(sites)
+
+
+def _activate_website(payload: dict[str, Any]) -> None:
+    """Reload caddy, so it serves what the rendered Caddyfile says."""
     caddy.reload()
+
+
+def _deploy_website(payload: dict[str, Any]) -> None:
+    """A whole deployment as one job — rows queued before the chain existed."""
+    _provision_website(payload)
+    _configure_website(payload)
+    _activate_website(payload)
 
 
 def _delete_website(payload: dict[str, Any]) -> None:
@@ -116,9 +134,15 @@ def _delete_website(payload: dict[str, Any]) -> None:
 
 
 _HANDLERS = {
+    website.PROVISION_KIND: _provision_website,
+    website.CONFIGURE_KIND: _configure_website,
+    website.ACTIVATE_KIND: _activate_website,
     website.DEPLOY_KIND: _deploy_website,
     website.DELETE_KIND: _delete_website,
 }
+
+# The deployment chain: finishing one step enqueues the next.
+_NEXT = dict(zip(website.DEPLOY_CHAIN, website.DEPLOY_CHAIN[1:], strict=False))
 
 
 def _heal() -> None:

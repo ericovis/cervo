@@ -11,7 +11,7 @@ import pytest
 from fastmcp import Client
 from fastmcp.client.elicitation import ElicitResult
 
-from cervo import caddy, config, mail, worker
+from cervo import caddy, config, mail, server, worker
 from cervo.schema import create_tables
 from cervo.server import app
 
@@ -81,6 +81,17 @@ def mailbox(monkeypatch) -> Mailbox:
 
     monkeypatch.setattr(mail, "send", fake_send)
     return sent
+
+
+@pytest.fixture(autouse=True)
+def no_follow(monkeypatch):
+    """create_website hands the site back at once: no worker process runs.
+
+    Clients send a progress token by default, and the tool would otherwise
+    watch the deployment for a while. It still sends one progress report;
+    the streaming test widens the window itself to watch a whole chain.
+    """
+    monkeypatch.setattr(server, "_FOLLOW_FOR", 0)
 
 
 @pytest.fixture(autouse=True)

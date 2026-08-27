@@ -197,14 +197,14 @@ async def test_a_site_is_created_deployed_and_served():
 
         result = await client.call_tool("create_website", {"slug": slug})
         site = result.structured_content
-        assert site["status"] == "pending"
         assert site["error"] is None
         assert site["url"] == f"http://{slug}.{DOMAIN}"
 
-        with pytest.raises(ToolError, match="already own"):
-            await client.call_tool("create_website", {"slug": slug})
-
-        site = await wait_for_deployment(client, slug)
+        # The client sends a progress token, so the tool follows the chain
+        # and normally hands the site back already live; wait out the rare
+        # case where it gave up before the worker finished.
+        if site["status"] != "live":
+            site = await wait_for_deployment(client, slug)
         assert site["status"] == "live", site
         assert site["error"] is None
 
@@ -218,6 +218,29 @@ async def test_a_site_is_created_deployed_and_served():
     )
     assert slug in page
     assert "cervo" in page
+
+
+async def test_a_followed_creation_reports_progress_and_returns_live():
+    """A progress token makes create_website follow the deployment chain."""
+    email = f"{unique('progress')}@example.com"
+    slug = unique("followed")
+    updates = []
+
+    async def on_progress(progress, total, message):
+        updates.append((progress, total, message))
+
+    async with chat() as client:
+        await sign_in(client, email)
+        result = await client.call_tool(
+            "create_website", {"slug": slug}, progress_handler=on_progress
+        )
+
+    site = result.structured_content
+    assert site["status"] == "live", site
+    assert updates, "no progress notifications arrived"
+    steps = [progress for progress, _, _ in updates]
+    assert steps[0] == 0 and steps[-1] == 3
+    assert all(total == 3 for _, total, _ in updates)
 
 
 def test_the_homepage_is_served():

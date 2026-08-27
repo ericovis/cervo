@@ -8,7 +8,7 @@ from fastmcp.exceptions import ToolError
 
 from cervo import job, user, website
 from cervo.db import connect
-from tests.conftest import OWNER, call, chat, sign_in
+from tests.conftest import OWNER, call, chat, deploy, sign_in
 
 
 async def test_creating_a_site_needs_a_signed_in_chat():
@@ -41,6 +41,9 @@ async def test_the_owner_comes_from_the_session(mailbox):
         "user_id": alice.id,
         "status": "pending",
         "error": None,
+        "step": "writing the site's files",
+        "steps_done": 0,
+        "steps_total": 3,
         "url": "http://alices-site.localhost",
     }
 
@@ -123,15 +126,19 @@ def test_a_reserved_slug_is_refused():
         assert not website.exists(conn, "caddyfile")
 
 
-def test_creating_a_site_queues_its_deployment():
+def test_creating_a_site_queues_the_first_step_of_the_chain():
     with connect() as conn:
         owner = user.ensure(conn, OWNER)
         site = website.create(conn, "queued", owner)
-        deployment = job.latest(conn, website.DEPLOY_KIND, {"slug": "queued"})
+        deployment = job.latest(conn, website.PROVISION_KIND, {"slug": "queued"})
+        queued = conn.execute("SELECT count(*) c FROM job").fetchone()["c"]
 
     assert site.status == "pending"
+    assert site.step == "writing the site's files"
+    assert (site.steps_done, site.steps_total) == (0, 3)
     assert deployment is not None
     assert deployment.status == "pending"
+    assert queued == 1  # later steps are queued by the worker, one at a time
 
 
 def test_a_failed_deployment_is_queued_again_by_its_owner():
@@ -152,12 +159,30 @@ def test_a_live_site_is_not_deployed_again():
     with connect() as conn:
         owner = user.ensure(conn, OWNER)
         website.create(conn, "settled", owner)
-        conn.execute("UPDATE job SET status = 'done'")
+    deploy()
 
     with connect() as conn:
         with pytest.raises(website.WebsiteError, match="live"):
             website.create(conn, "settled", owner)
-        assert conn.execute("SELECT count(*) c FROM job").fetchone()["c"] == 1
+        assert conn.execute("SELECT count(*) c FROM job").fetchone()["c"] == 3
+
+
+def test_a_legacy_single_job_deployment_still_reads_as_live():
+    """Rows queued before the chain existed keep an old site's status right."""
+    with connect() as conn:
+        owner = user.ensure(conn, OWNER)
+        website.create(conn, "old-timer", owner)
+        conn.execute("DELETE FROM job")
+        job.enqueue(conn, website.DEPLOY_KIND, {"slug": "old-timer"})
+        conn.execute("UPDATE job SET status = 'done'")
+
+    with connect() as conn:
+        site = website.get(conn, "old-timer")
+        with pytest.raises(website.WebsiteError, match="live"):
+            website.create(conn, "old-timer", owner)
+
+    assert site.status == "live"
+    assert site.steps_done == site.steps_total
 
 
 def test_a_site_cannot_point_at_a_user_who_does_not_exist():
