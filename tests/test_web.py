@@ -50,7 +50,12 @@ async def test_the_catalog_lists_only_live_sites(client):
 
 def test_the_docs_have_their_anchors(client):
     page = client.get("/docs").text
-    for anchor in ("getting-started", "updating-your-site", "how-deployments-work"):
+    for anchor in (
+        "connecting-from-claude",
+        "getting-started",
+        "updating-your-site",
+        "how-deployments-work",
+    ):
         assert f'id="{anchor}"' in page
 
 

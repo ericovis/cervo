@@ -1,6 +1,6 @@
 """The documentation: one page, three anchored sections."""
 
-from fasthtml.common import A, Code, P
+from fasthtml.common import A, Code, Li, Ol, P, Strong
 from starlette.responses import HTMLResponse
 
 from cervo import config
@@ -18,6 +18,9 @@ def docs_page() -> HTMLResponse:
         ),
         layout.receipt(
             layout.receipt_row(
+                "connect", A("Connecting from Claude", href="#connecting-from-claude")
+            ),
+            layout.receipt_row(
                 "start here", A("Getting started", href="#getting-started")
             ),
             layout.receipt_row(
@@ -28,23 +31,59 @@ def docs_page() -> HTMLResponse:
             ),
         ),
         layout.section(
-            "GETTING STARTED",
+            "CONNECTING FROM CLAUDE",
             P(
-                "Add cervo as a connector in Claude — with authentication "
-                "required — pointing at cervo's MCP server:"
+                "Cervo works through Claude. Signing in is part of "
+                "connecting — there is nothing to configure beyond the "
+                "connector itself, whose MCP server lives at:"
             ),
             layout.endpoint_chip(f"{config.origin()}/mcp"),
-            P(
-                "Connecting opens cervo's sign-in page in your browser: "
-                "enter your email, type back the six-digit code that lands "
-                "in your inbox, and you are done. The verified address owns "
-                "everything you create, and the connection stays signed in "
-                "on its own — no codes in the chat, ever."
+            P(Strong("On claude.ai"), " (or the Claude desktop and mobile apps):"),
+            Ol(
+                Li(
+                    "Open Settings, choose Connectors, and click ",
+                    Strong("Add custom connector"),
+                    ".",
+                ),
+                Li(
+                    "Name it cervo and paste the MCP server URL above. Under "
+                    "the advanced settings, keep ",
+                    Strong("Use Anthropic's hosted client metadata"),
+                    " selected — the recommended option, which cervo "
+                    "supports — and require authentication.",
+                ),
+                Li(
+                    "Click Connect. Your browser opens cervo's sign-in "
+                    "page: enter your email and type back the six-digit "
+                    "code that lands in your inbox."
+                ),
+                cls="steps",
             ),
             P(
-                "Then ask for a website. A site's name is its slug — "
-                "lowercase letters, digits, and hyphens — and becomes its "
-                "address:"
+                Strong("In Claude Code"),
+                ": add the server with ",
+                Code(f"claude mcp add --transport http cervo {config.origin()}/mcp"),
+                ", then run ",
+                Code("/mcp"),
+                " to connect — the same browser sign-in opens.",
+            ),
+            P(
+                "Either way the verified email owns everything you create, "
+                "and the connection stays signed in on its own — no codes "
+                "in the chat, ever. By connecting you agree to the ",
+                A("terms of service", href="/terms"),
+                " and the ",
+                A("privacy policy", href="/privacy"),
+                ".",
+            ),
+            anchor="connecting-from-claude",
+        ),
+        layout.section(
+            "GETTING STARTED",
+            P(
+                "Once connected, just ask for a website. A site's name is "
+                "its slug — lowercase letters, digits, and hyphens — and "
+                "becomes its address:"
             ),
             layout.prompts(
                 "Create a website called my-cool-site",

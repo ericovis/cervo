@@ -14,9 +14,23 @@ Caddy fronts everything on port 80: the MCP server at `http://localhost/mcp`, an
 
 Then open Claude Code in this repo — the server is pre-registered in `.mcp.json`, so its tools become available directly in the chat. Connecting runs cervo's OAuth sign-in in the browser: enter an email and type back the code that lands in [mailcatcher](http://localhost:1080) (no real mail is sent in development). Start the stack *before* opening the Claude Code session (connections are made at startup), and run `/mcp` to reconnect whenever you change the MCP server code (`docker compose restart app`) — Claude Code doesn't reconnect automatically.
 
-On claude.ai, add cervo as a custom connector pointing at `https://{your-domain}/mcp` with **authentication: always required** — "Use Anthropic's hosted client metadata" works out of the box (cervo advertises CIMD) and is the recommended option.
-
 Development works with zero configuration; settings can be overridden via a `.env` file (see the [configuration table](CLAUDE.md#configuration)).
+
+## Connecting from claude.ai
+
+Once deployed (see below), add cervo as a custom connector:
+
+1. On claude.ai, open **Settings → Connectors** and click **Add custom
+   connector**.
+2. Name it (e.g. `cervo`) and set the remote MCP server URL to
+   `https://{your-domain}/mcp`.
+3. Under advanced settings, keep **Use Anthropic's hosted client metadata**
+   selected — the recommended option; cervo advertises CIMD support so it
+   works out of the box (plain dynamic client registration works too) — and
+   set authentication to **always required**.
+4. Click **Connect**: your browser opens cervo's sign-in page. Enter your
+   email and type back the six-digit code from your inbox. The connection
+   then stays signed in on its own.
 
 ## Deploying
 

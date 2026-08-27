@@ -95,6 +95,7 @@ _PAGE_CSS = """
   section p { margin: 10px 0 0; max-width: 56ch; }
   .endpoint { display: inline-block; margin: 14px 0 0; padding: 10px 16px; background: var(--code-bg); border: 1px solid var(--rule); border-radius: 6px; overflow-wrap: anywhere; }
   .endpoint a { text-decoration: none; }
+  .steps { margin: 12px 0 0; padding-left: 22px; display: flex; flex-direction: column; gap: 8px; }
   .prompts { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
   .prompts > div { display: flex; gap: 10px; }
   .prompts .caret { color: var(--accent); }

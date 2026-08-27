@@ -134,6 +134,11 @@ read the identity per request via `get_access_token()`: the subject is the
 user id, the email a claim. Nothing about auth is per-conversation anymore —
 a connector stays signed in as long as Claude keeps refreshing.
 
+The email page states that connecting means agreeing to the terms of service
+and privacy policy (`/terms`, `/privacy`); connector setup is documented for
+users on the public `/docs` page and for operators in the README's
+"Connecting from claude.ai" section.
+
 ## Jobs and deployment
 
 Creating a website inserts the row and enqueues the first job of the deploy

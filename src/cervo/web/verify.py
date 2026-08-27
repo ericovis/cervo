@@ -131,6 +131,14 @@ def _email_page(
                 method="post",
                 cls="verify",
             ),
+            P(
+                "By connecting you agree to the ",
+                A("terms of service", href="/terms"),
+                " and the ",
+                A("privacy policy", href="/privacy"),
+                ".",
+                cls="intro",
+            ),
         ),
     )
 

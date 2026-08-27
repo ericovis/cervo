@@ -53,6 +53,9 @@ async def test_submitting_the_email_advances_to_the_code_form(mailbox):
         page = await web.get(f"/verify?txn={flow.txn}")
         assert 'name="email"' in page.text
         assert page.headers["cache-control"] == "no-store"
+        # connecting is agreeing to the terms, and the page says so
+        assert 'href="/terms"' in page.text
+        assert 'href="/privacy"' in page.text
 
         response = await flow.submit_email(OWNER)
         assert response.status_code == 303
