@@ -38,6 +38,7 @@ extend-select = ["I", "B", "UP", "SIM", "RUF", "TID"]
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 # A domain's dao is private to it. Everything else goes through its service.
 "cervo.auth._dao".msg = "Use cervo.auth's service instead of reaching into its _dao."
+"cervo.job._dao".msg = "Use cervo.job's service instead of reaching into its _dao."
 "cervo.user._dao".msg = "Use cervo.user's service instead of reaching into its _dao."
 "cervo.website._dao".msg = "Use cervo.website's service instead of reaching into its _dao."
 
