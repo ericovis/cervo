@@ -1,37 +1,40 @@
 # Cervo
 
-A demo app for managing static website hosting on a shared VPS, built as an MCP server with [FastMCP](https://gofastmcp.com). Claude Code is the AI/chat interface used to exercise and test the server's tools during development. The dev environment mirrors the VPS: caddy serves the hosted sites from `.data`, and mailcatcher stands in for SMTP.
+A demo app for managing static website hosting on a shared VPS, built as an MCP server with [FastMCP](https://gofastmcp.com). Claude Code is the AI/chat interface used to exercise and test the server's tools during development. The whole environment — dev and production alike — runs from docker-compose: caddy is the front door, a worker process runs deployments, and mailcatcher stands in for SMTP in development.
 
 ## Running
 
-Prerequisites: [uv](https://docs.astral.sh/uv/) and [Docker](https://www.docker.com/) (with Compose) must be installed.
+Prerequisite: [Docker](https://www.docker.com/) (with Compose). [uv](https://docs.astral.sh/uv/) is used for lint/format and can run the test suite directly.
 
 ```bash
-uv sync                 # install deps
-uv run cervo            # start the MCP server (HTTP)
-docker compose up -d    # supporting services (caddy, mailcatcher)
+bin/dev    # docker compose up -d — the whole environment
 ```
 
-The server always runs over HTTP (stdio is intentionally not used), at `http://127.0.0.1:8000/mcp` by default.
+The stack is four services, all sharing the `.data` volume at `/mnt/data`:
 
-Lint and format with ruff before committing: `uv run ruff check .` and `uv run ruff format .`.
+- `app` — the MCP server. Publishes no port; caddy reverse-proxies it at `http://localhost` (MCP endpoint: `http://localhost/mcp`).
+- `worker` — the job worker (`cervo-worker`). Boots first, creates the database tables, and renders the initial Caddyfile.
+- `caddy` — the front door on ports 80/443. Runs on the generated `/mnt/data/Caddyfile` and serves the sites at `http://{slug}.localhost`. Its unauthenticated admin API (`caddy:2019`) is reachable only on the compose network. On a fresh checkout it restarts until the worker first renders the Caddyfile — that's the `restart: unless-stopped` doing its job, not a bug.
+- `mail` — mailcatcher (SMTP on 1025, web UI at http://localhost:1080). Development mail goes here, not to real SMTP.
+
+`./src` (and `./tests`) are bind-mounted into `app` and `worker`, so after changing code run `docker compose restart app` (or `worker`) — no rebuild needed. Rebuild (`docker compose build`) only when dependencies change.
+
+Lint and format with ruff before committing: `bin/lint` (runs `uv run ruff
+check .` and `uv run ruff format .`).
 Rule selection is `extend-select` in `pyproject.toml` — it adds to ruff's defaults rather
 than replacing them, so keep it that way or the project lints less than it does now.
 
-Mail in development goes to mailcatcher, not real SMTP; verify sent mail at http://localhost:1080.
-
 ## Configuration
 
-All settings live in `src/cervo/config.py`, read from the environment / `.env` via python-decouple. Every default is already correct for development — no `.env` file is needed; only create one to override values for non-dev setups. Never hardcode a value in server code that belongs in config — add it to `config.py` with a default and document it in the table below.
+Settings live in `src/cervo/config.py`. Paths and service addresses are **constants**, not environment variables: the stack always runs from compose, so `/mnt/data` (the shared volume), the database at `/mnt/data/cervo.db`, the MCP bind (`0.0.0.0:8000`), caddy's admin API (`http://caddy:2019`), and the proxy upstream (`app:8000`) are the same everywhere, and an env var would only invite drift. Job tuning (attempts, retry delay, timeout, poll interval) is private module constants for the same reason.
+
+What actually varies between environments is read from the environment / `.env` via python-decouple, with defaults correct for development — no `.env` file is needed in dev:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `EMAIL_HOST` / `EMAIL_PORT` | `localhost` / `1025` | SMTP (mailcatcher in dev) |
+| `DOMAIN` | `localhost` | cervo is served at `http://{DOMAIN}`, sites at `http://{slug}.{DOMAIN}` |
+| `EMAIL_HOST` / `EMAIL_PORT` | `mail` / `1025` | SMTP (the mailcatcher service in dev) |
 | `EMAIL_FROM` | `cervo@localhost` | From address on outgoing mail |
-| `DATA_DIR` | `<repo>/.data` | data directory, shared with the caddy container |
-| `DATABASE_PATH` | `<DATA_DIR>/cervo.db` | SQLite database file |
-| `BASE_DOMAIN` | `localhost` | domain the hosted sites are served under (`SITES_DOMAIN` in code) |
-| `MCP_HOST` / `MCP_PORT` | `127.0.0.1` / `8000` | HTTP bind address |
 | `AUTH_CODE_TTL` | `600` | seconds an emailed sign-in code stays valid |
 | `AUTH_SESSION_TTL` | `14400` | seconds a chat stays signed in (4 hours) |
 
@@ -40,15 +43,25 @@ All settings live in `src/cervo/config.py`, read from the environment / `.env` v
 - `src/cervo/server.py` — the FastMCP instance (`app`) and all tool definitions.
   `authenticate` uses MCP elicitation to have the human confirm the address before
   any code is sent, so a client that cannot elicit cannot sign in.
+- `src/cervo/worker.py` — the job worker: polls for due jobs, dispatches them by
+  kind (`_HANDLERS`), reaps timed-out ones. Entry point `cervo-worker`.
 - `src/cervo/config.py` — settings (see above)
-- `src/cervo/user/`, `src/cervo/website/`, `src/cervo/auth/` — one package per
-  domain (see below)
+- `src/cervo/user/`, `src/cervo/website/`, `src/cervo/auth/`, `src/cervo/job/` —
+  one package per domain (see below)
 - `src/cervo/schema.py` — `create_tables()`, the one place that knows every table
 - `src/cervo/db.py` — `connect()`, the connection context manager
 - `src/cervo/errors.py` — `AppError`, the base for failures the user should read
 - `src/cervo/mail.py` — sending mail over SMTP
-- `src/cervo/__init__.py` — `main()` entrypoint (`uv run cervo`)
-- `docker-compose.yml` — caddy (ports 8080/8443, serves `.data`) and mailcatcher (SMTP on 1025, web UI at http://localhost:1080)
+- `src/cervo/caddy.py` — rendering the Caddyfile from the database and reloading
+  caddy over its admin API
+- `src/cervo/templates/` — jinja2 templates: the Caddyfile and a site's default
+  `index.html`
+- `src/cervo/__init__.py` — `main()` entrypoint (the `app` service)
+- `Dockerfile` — one image for `app`, `worker`, and the test runner
+  (`ENTRYPOINT ["uv", "run"]`)
+- `docker-compose.yml` — the dev environment (see Running);
+  `docker-compose.test.yml` — the throwaway test stack (see Tests)
+- `bin/` — the everyday commands: `dev`, `lint`, `test`, `smoke`
 
 ## Domains
 
@@ -79,49 +92,93 @@ underscore-prefixed (`_UPSERT`, `_MAX_ATTEMPTS`), and so are helpers.
 and `website.user_id` references it. Sites belong to a user, not to an email string,
 so one person can own many.
 
-## Authentication
+`job` is generic on purpose: a row is a `kind` plus a JSON `payload`, so future
+background work reuses the same queue, retry, and timeout machinery. Timestamps
+and payload serialization never leave its `_dao`.
 
-Confirming an email is the only identity check. A chat calls `authenticate`, the
-user pastes back the code that was mailed, and the chat is signed in for
-`AUTH_SESSION_TTL`. Sessions are keyed by MCP session id, so they last as long as
-the conversation does and a new conversation starts signed out. `create_website`
-takes its owner from the session, never from an argument — tools that act on a
-user's sites should call `services.auth.require()` and let its error tell the
-agent to re-authenticate.
+## Jobs and deployment
+
+Creating a website inserts the row and enqueues a `website.deploy` job — the MCP
+server never provisions anything itself. The worker claims due jobs and runs the
+deployment: create `DATA_DIR/{slug}/`, write the default `index.html` (only if
+missing — an owner's replaced files are never clobbered), regenerate the whole
+Caddyfile from the database, and POST it to caddy's `/load` admin endpoint. Every
+step is idempotent, so retrying is always safe.
+
+Job lifecycle: `pending → running → done`, or on failure back to `pending` with
+`attempts + 1` and a retry delay, until `failed` for good after `_MAX_ATTEMPTS`.
+A running job that outlives its `timeout` is reaped — counted as a failed attempt
+and made pending again — which is also the crash recovery: a worker killed
+mid-job needs no shutdown protocol. At startup the worker also "heals": it
+renders and reloads the Caddyfile even with no jobs queued, so a fresh checkout
+or restored data directory starts serving immediately.
+
+A site's `status`/`error` shown by the tools is its latest deploy job's state
+(`running` reads as `deploying`, `done` as `live`). Calling `create_website` on
+your own failed site queues a fresh deployment; the slug `caddyfile` is reserved
+(it would collide with `DATA_DIR/Caddyfile` on case-insensitive filesystems).
 
 ## Tests
 
 ```bash
-uv run pytest
+bin/test    # unit suite, verbose; extra args go to pytest (bin/test tests/test_job.py)
+bin/smoke   # the whole stack end to end, driven through a real MCP client
 ```
 
-CI runs the same steps on push to `main` and on every pull request
-(`.github/workflows/test.yml`): `uv sync --locked`, `ruff check`,
-`ruff format --check`, then `pytest`. It starts no services — the suite needs
-neither caddy nor mailcatcher.
+Both run in the throwaway test stack and tear it down afterwards — containers,
+network, and volume — pass or fail (`bin/smoke` rebuilds every image first and
+dumps the stack's logs when it failed). CI runs these same scripts as separate
+steps, so the stacks never race each other.
 
-Tests never touch development data: an autouse fixture in `tests/conftest.py`
-repoints `config.DATA_DIR` and `config.DATABASE_PATH` at a per-test `tmp_path` and
-creates the tables there, and another replaces `mail.send` with a capture
-list, so nothing reaches `.data` or mailcatcher. Both are autouse — a test cannot
-escape them by forgetting a fixture — and `tests/test_isolation.py` asserts the
-guarantees hold.
+Tests have their own compose file and project (`cervo-test`) holding the whole
+stack, fully separate from dev: a named volume instead of `./.data`, no source
+bind mounts — code and tests run as baked into the image, so the scripts
+always pass `--build` — and **no published ports**, so it runs side by side
+with the dev stack and there is no way for test and dev data (or ports) to
+collide.
+
+`tests/smoke.py` holds the end-to-end checks, run by their own `smoke`
+service — `depends_on` pulls up the stack they exercise. From inside the test
+network they cover the whole surface through real clients: every tool listed,
+sign-in with the code verified in mailcatcher (sender, subject, wrong code
+refused, declining sends nothing), sessions not leaking across conversations,
+slug validation and ownership rules, and a site created, polled to `live`,
+and its page actually fetched through caddy. The file is intentionally named
+so a plain `pytest` run skips it (it needs the stack up); in the test stack
+`DOMAIN` is set to `caddy`, so the front door is `http://caddy` and sites are
+fetched with a Host header.
+
+The unit suite is hermetic on top of the stack isolation (see below), so
+`uv run pytest` on the host works too — CI (`.github/workflows/test.yml`)
+lints with uv, then runs `bin/test` and `bin/smoke` on push to `main` and on
+every pull request.
+
+Tests never touch development data or services: autouse fixtures in
+`tests/conftest.py` repoint `config.DATA_DIR` and `config.DATABASE_PATH` at a
+per-test `tmp_path` (creating the tables there), replace `mail.send` with a
+capture list, and replace `caddy.reload` the same way. All three are autouse — a
+test cannot escape them by forgetting a fixture — and `tests/test_isolation.py`
+asserts the guarantees hold.
 
 Write tests against the MCP tools rather than the services: `chat()` returns a
 client whose connection is one conversation (its own session id, so its own
 sign-in) with a scripted human answering the elicitation, and `sign_in()` runs the
 whole handshake. Read codes out of the `mailbox` fixture the way a user reads their
-inbox.
+inbox. The worker never runs as a process in tests — call `worker.run_once()` (or
+the `deploy()` helper) for deterministic deployments.
 
 Note `tests/__init__.py` is required: a transitive dependency (`caio`) installs a
 top-level `tests` package that otherwise shadows this one.
 
 ## Testing with Claude Code
 
-The server is registered as a project MCP server in `.mcp.json`, so when it's running, its tools are available directly in the chat — the primary way to test is to just call them and check the results.
+The server is registered as a project MCP server in `.mcp.json` at
+`http://localhost/mcp` — through caddy, like production. When the stack is up, its
+tools are available directly in the chat — the primary way to test is to just call
+them and check the results.
 
-- The server must already be running (`uv run cervo`) **before starting the Claude Code session** — Claude Code does not start it, and it connects to MCP servers at session startup. If the server wasn't up when the session began (or tool calls fail to connect), check that it's running and that `MCP_PORT` matches `.mcp.json`, then run `/mcp` to connect.
-- Claude Code never reconnects automatically: whenever you change the MCP server code, restart the server and run `/mcp` to reconnect. This is mandatory when tool schemas change (names, parameters, docstrings), since tool definitions are cached from the initial handshake; if only a tool's body changed, restarting the server is enough — the next call reaches the fresh process as long as the schema still matches.
+- The stack must already be running (`docker compose up -d`) **before starting the Claude Code session** — Claude Code connects to MCP servers at session startup. If tool calls fail to connect, check `docker compose ps` (on a fresh checkout, give the worker a moment to render the Caddyfile so caddy stays up), then run `/mcp` to connect.
+- Claude Code never reconnects automatically: whenever you change the MCP server code, `docker compose restart app` and run `/mcp` to reconnect. This is mandatory when tool schemas change (names, parameters, docstrings), since tool definitions are cached from the initial handshake; if only a tool's body changed, restarting the service is enough — the next call reaches the fresh process as long as the schema still matches. Worker-side changes (deployments) need only `docker compose restart worker`.
 - For checks the MCP connection can't cover (error cases, raw protocol), use a throwaway `fastmcp.Client` script:
 
 ```python
@@ -130,7 +187,7 @@ from fastmcp import Client
 
 
 async def main():
-    async with Client("http://127.0.0.1:8000/mcp") as client:
+    async with Client("http://localhost/mcp") as client:
         print(await client.list_tools())
 
 

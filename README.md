@@ -4,15 +4,15 @@ A demo app for managing static website hosting on a shared VPS. It's built as an
 
 ## Quick start
 
-Prerequisites: [uv](https://docs.astral.sh/uv/) and [Docker](https://www.docker.com/) (with Compose).
+Prerequisite: [Docker](https://www.docker.com/) (with Compose).
 
 ```bash
-uv sync                 # install deps
-docker compose up -d    # supporting services (caddy, mailcatcher)
-uv run cervo            # start the MCP server at http://127.0.0.1:8000/mcp
+bin/dev    # docker compose up -d: app, worker, caddy, mail
 ```
 
-Then open Claude Code in this repo — the server is pre-registered in `.mcp.json`, so its tools become available directly in the chat. Start the MCP server *before* opening the Claude Code session (connections are made at startup), and run `/mcp` to reconnect whenever you change the MCP server code — Claude Code doesn't reconnect automatically.
+Caddy fronts everything on port 80: the MCP server at `http://localhost/mcp`, and each created site at `http://{slug}.localhost`.
+
+Then open Claude Code in this repo — the server is pre-registered in `.mcp.json`, so its tools become available directly in the chat. Start the stack *before* opening the Claude Code session (connections are made at startup), and run `/mcp` to reconnect whenever you change the MCP server code (`docker compose restart app`) — Claude Code doesn't reconnect automatically.
 
 Development works with zero configuration; settings can be overridden via a `.env` file (see the [configuration table](CLAUDE.md#configuration)).
 
