@@ -122,7 +122,7 @@ def _write_default_page(site: website.Website) -> None:
 def _configure_website(payload: dict[str, Any]) -> None:
     """Render the Caddyfile from the database, covering every site."""
     with connect() as conn:
-        sites = website.all_sites(conn)
+        sites = website.routes(conn)
     caddy.render(sites)
 
 
@@ -218,7 +218,7 @@ def _delete_website(payload: dict[str, Any]) -> None:
     """
     slug = payload["slug"]
     with connect() as conn:
-        sites = website.all_sites(conn)
+        sites = website.routes(conn)
         reclaimed = website.exists(conn, slug)
     caddy.render(sites)
     caddy.reload()
@@ -256,7 +256,7 @@ def _heal() -> None:
     """
     try:
         with connect() as conn:
-            sites = website.all_sites(conn)
+            sites = website.routes(conn)
         caddy.render(sites)
         caddy.reload()
     except Exception as error:  # noqa: BLE001 — startup must not die on caddy

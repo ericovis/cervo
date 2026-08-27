@@ -44,6 +44,22 @@ def test_the_caddyfile_turns_on_automatic_https(https, data_dir, caddy_reloads):
     assert "email certs@example.com" in caddyfile
 
 
+def test_each_site_registers_its_owners_acme_email(https, data_dir, caddy_reloads):
+    created("secure")
+    deploy()
+
+    caddyfile = (data_dir / "Caddyfile").read_text()
+    assert "\ttls owner@example.com" in caddyfile  # inside the site's block
+    assert caddyfile.count("tls ") == 1  # cervo itself keeps the global email
+
+
+def test_plain_http_sets_no_acme_contact(data_dir, caddy_reloads):
+    created("plain")
+    deploy()
+
+    assert "tls " not in (data_dir / "Caddyfile").read_text()
+
+
 class _RecordingSMTP:
     """A fake smtplib.SMTP that records the calls the real one would get."""
 

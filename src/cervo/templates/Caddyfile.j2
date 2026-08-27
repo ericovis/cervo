@@ -8,13 +8,18 @@
 
 {# A schemeless address turns on caddy's automatic HTTPS: a certificate per
    hostname, and plain-http requests redirected. http:// keeps development
-   certificate-free. -#}
+   certificate-free. Each hosted site registers its owner's email as the
+   ACME contact for its certificate; the global email above covers only
+   cervo's own hostname. -#}
 {% if scheme == "https" %}{{ domain }}{% else %}http://{{ domain }}{% endif %} {
 	reverse_proxy {{ mcp_upstream }}
 }
 {% for site in sites %}
 
 {% if scheme == "https" %}{{ site.slug }}.{{ domain }}{% else %}http://{{ site.slug }}.{{ domain }}{% endif %} {
+{%- if scheme == "https" %}
+	tls {{ site.owner_email }}
+{%- endif %}
 	root * {{ data_dir }}/{{ site.slug }}
 	file_server
 }

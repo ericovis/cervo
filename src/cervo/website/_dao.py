@@ -10,7 +10,7 @@ only here; they leave as the model's datetimes.
 import sqlite3
 from datetime import UTC, datetime
 
-from cervo.website.types import Website
+from cervo.website.types import Route, Website
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS website (
@@ -40,6 +40,12 @@ _EXISTS = "SELECT 1 FROM website WHERE slug = ?"
 _FOR_USER = "SELECT * FROM website WHERE user_id = ? ORDER BY slug"
 
 _ALL = "SELECT * FROM website ORDER BY slug"
+
+_ROUTES = """
+SELECT website.slug, user.email AS owner_email
+FROM website JOIN user ON user.id = website.user_id
+ORDER BY website.slug
+"""
 
 _DELETE = "DELETE FROM website WHERE slug = ?"
 
@@ -80,9 +86,15 @@ def for_user(conn: sqlite3.Connection, user_id: int) -> list[Website]:
 
 
 def all_sites(conn: sqlite3.Connection) -> list[Website]:
-    """Every site there is, for rendering the web server's config."""
+    """Every site there is."""
     rows = conn.execute(_ALL).fetchall()
     return [Website(**row) for row in rows]
+
+
+def routes(conn: sqlite3.Connection) -> list[Route]:
+    """Every site with its owner's email, for the web server's config."""
+    rows = conn.execute(_ROUTES).fetchall()
+    return [Route(**row) for row in rows]
 
 
 def delete(conn: sqlite3.Connection, slug: str) -> bool:

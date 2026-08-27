@@ -32,6 +32,18 @@ FilePath = Annotated[
 FileStatus = Literal["pending", "working", "done", "failed"]
 
 
+class Route(BaseModel):
+    """One site as the web server needs it, for rendering its config.
+
+    The owner's email is registered with the certificate authority as the
+    ACME contact for the site's own certificate — the operator's
+    ``ACME_EMAIL`` covers only cervo's own hostname.
+    """
+
+    slug: Slug
+    owner_email: str
+
+
 class Website(BaseModel):
     """A static website hosted on the VPS, owned by exactly one user.
 

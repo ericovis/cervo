@@ -14,7 +14,7 @@ from cervo import config, job
 from cervo.errors import AppError
 from cervo.user.types import User
 from cervo.website import _dao
-from cervo.website.types import FileDeletion, FileWrite, Website, WebsiteStatus
+from cervo.website.types import FileDeletion, FileWrite, Route, Website, WebsiteStatus
 
 DELETE_KIND = "website.delete"
 
@@ -137,9 +137,9 @@ def for_user(conn: sqlite3.Connection, owner: User) -> list[Website]:
     return [_with_deployment(conn, site) for site in _dao.for_user(conn, owner.id)]
 
 
-def all_sites(conn: sqlite3.Connection) -> list[Website]:
-    """Every site there is, for rendering the web server's config."""
-    return _dao.all_sites(conn)
+def routes(conn: sqlite3.Connection) -> list[Route]:
+    """Every site with its owner's email, for the web server's config."""
+    return _dao.routes(conn)
 
 
 def live(conn: sqlite3.Connection) -> list[Website]:

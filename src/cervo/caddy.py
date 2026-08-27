@@ -15,7 +15,7 @@ from uuid import uuid4
 from jinja2 import Environment, PackageLoader
 
 from cervo import config
-from cervo.website.types import Website
+from cervo.website.types import Route
 
 _env = Environment(loader=PackageLoader("cervo"), keep_trailing_newline=True)
 
@@ -24,7 +24,7 @@ def _caddyfile_path():
     return config.DATA_DIR / "Caddyfile"
 
 
-def render(sites: list[Website]) -> None:
+def render(sites: list[Route]) -> None:
     """Write the whole Caddyfile for these sites. Idempotent."""
     text = _env.get_template("Caddyfile.j2").render(
         domain=config.DOMAIN,

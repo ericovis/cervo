@@ -48,7 +48,7 @@ What actually varies between environments is read from the environment / `.env` 
 |---|---|---|
 | `DOMAIN` | `localhost` | cervo is served at `{SCHEME}://{DOMAIN}`, sites at `{SCHEME}://{slug}.{DOMAIN}` |
 | `SCHEME` | `http` | `https` in production: caddy then gets a certificate per hostname (persisted in its `/data` volume) and redirects plain http |
-| `ACME_EMAIL` | *(empty)* | contact caddy registers with Let's Encrypt |
+| `ACME_EMAIL` | *(empty)* | ACME contact for cervo's own hostname; each hosted site registers its owner's email instead |
 | `WEB_CONCURRENCY` | `1` | uvicorn worker processes serving `app`; safe to raise — MCP is stateless and SQLite runs in WAL |
 | `WORKER_CONCURRENCY` | `1` | polling threads in the `worker` container; safe to raise — job claiming is atomic and the Caddyfile kinds are serialized |
 | `EMAIL_HOST` / `EMAIL_PORT` | `mail` / `1025` | SMTP (the mailcatcher service in dev) |
