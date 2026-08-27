@@ -1,0 +1,45 @@
+name: cervo-test
+
+services:
+  tests:
+    build: .
+    command: pytest
+    environment:
+      DOMAIN: caddy
+  smoke:
+    build: .
+    command: pytest -v tests/smoke.py
+    environment:
+      DOMAIN: caddy
+    depends_on:
+      - app
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      DOMAIN: caddy
+    volumes:
+      - data:/mnt/data
+    depends_on:
+      - worker
+      - caddy
+      - mail
+  worker:
+    build: .
+    command: cervo-worker
+    restart: unless-stopped
+    environment:
+      DOMAIN: caddy
+    volumes:
+      - data:/mnt/data
+  caddy:
+    image: caddy:latest
+    command: caddy run --config /mnt/data/Caddyfile --adapter caddyfile
+    restart: unless-stopped
+    volumes:
+      - data:/mnt/data
+  mail:
+    image: schickling/mailcatcher:latest
+
+volumes:
+  data:

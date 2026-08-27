@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Run the smoke tests against the whole test stack, then tear it all down —
+# dumping the stack's logs first when it failed.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+compose() { docker compose -f docker-compose.test.yml "$@"; }
+
+cleanup() {
+  status=$?
+  if [ "$status" -ne 0 ]; then compose logs; fi
+  compose down -v --remove-orphans
+  exit "$status"
+}
+trap cleanup EXIT
+
+compose build
+compose run --rm smoke
