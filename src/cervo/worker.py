@@ -116,13 +116,6 @@ def _activate_website(payload: dict[str, Any]) -> None:
     caddy.reload()
 
 
-def _deploy_website(payload: dict[str, Any]) -> None:
-    """A whole deployment as one job — rows queued before the chain existed."""
-    _provision_website(payload)
-    _configure_website(payload)
-    _activate_website(payload)
-
-
 def _validate_file(payload: dict[str, Any]) -> None:
     """Check a submitted file before anything touches the disk.
 
@@ -224,7 +217,6 @@ _HANDLERS = {
     website.PROVISION_KIND: _provision_website,
     website.CONFIGURE_KIND: _configure_website,
     website.ACTIVATE_KIND: _activate_website,
-    website.DEPLOY_KIND: _deploy_website,
     website.DELETE_KIND: _delete_website,
     website.DELETE_FILE_KIND: _delete_file,
     website.VALIDATE_FILE_KIND: _validate_file,

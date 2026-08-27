@@ -1,10 +1,12 @@
 """Shared page chrome: the "deploy receipt" design system in fasttags.
 
-The CSS and theme scripts are copied verbatim from the design system (see
-``design-system/cervo-tokens.css`` and ``src/cervo/templates/index.html.j2``)
-— each page carries the whole block inline, so a page is always
-self-contained and makes zero external requests.
+The theme variables come from one file, ``templates/_tokens.css`` (the
+MCP-app templates include the very same file); the rest of the CSS and the
+theme scripts are carried inline here, so every page is self-contained and
+makes zero external requests.
 """
+
+from importlib import resources
 
 from fasthtml.common import (
     H1,
@@ -31,33 +33,9 @@ from fasthtml.common import (
 )
 from starlette.responses import HTMLResponse
 
-_TOKENS_CSS = """
-  /* ── cervo design tokens: "deploy receipt" ─────────────────────────
-     Dark is the base; light overrides follow the visitor's OS setting,
-     and [data-theme] (set by the toggle) beats both. */
-  :root {
-    color-scheme: dark;
-    --bg: #1b1a16; --ink: #f0ead8; --text: #cfc9ba; --muted: #8a8574;
-    --accent: #e5a83c; --rule: #34322b; --dotted: #4a463c; --code-bg: #24221c;
-  }
-  @media (prefers-color-scheme: light) {
-    :root {
-      color-scheme: light;
-      --bg: #f7f3ea; --ink: #2b2820; --text: #4a463c; --muted: #857e6e;
-      --accent: #9a6a1f; --rule: #e2dac8; --dotted: #b8b09c; --code-bg: #efe8d6;
-    }
-  }
-  :root[data-theme="dark"] {
-    color-scheme: dark;
-    --bg: #1b1a16; --ink: #f0ead8; --text: #cfc9ba; --muted: #8a8574;
-    --accent: #e5a83c; --rule: #34322b; --dotted: #4a463c; --code-bg: #24221c;
-  }
-  :root[data-theme="light"] {
-    color-scheme: light;
-    --bg: #f7f3ea; --ink: #2b2820; --text: #4a463c; --muted: #857e6e;
-    --accent: #9a6a1f; --rule: #e2dac8; --dotted: #b8b09c; --code-bg: #efe8d6;
-  }
-"""
+# The theme variables live in one file so every page shares them; see
+# templates/_tokens.css. The MCP-app templates include the same file.
+_TOKENS_CSS = resources.files("cervo").joinpath("templates", "_tokens.css").read_text()
 
 _PAGE_CSS = """
   * { box-sizing: border-box; }

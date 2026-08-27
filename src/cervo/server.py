@@ -66,37 +66,48 @@ def _wants_progress(ctx: Context) -> bool:
     return meta is not None and meta.progressToken is not None
 
 
-def _progress_message(site: website.Website) -> str:
-    """One line saying where the deployment is, for a progress notification."""
-    if site.status == "live":
-        return f"live at {site.url}"
-    if site.status == "failed":
-        return f"deployment failed: {site.error}"
-    if site.status == "pending":
+def _chain_message(
+    state: website.Website | website.FileWrite | website.FileDeletion,
+    *,
+    success: str,
+    verb: str,
+    working: str,
+) -> str:
+    """One line saying where a background chain is, for a progress note.
+
+    The shared skeleton: its ``success`` message on the terminal-success
+    status (``live`` for a deployment, ``done`` for a file), a
+    ``"<verb> failed: …"`` on failure, a queued note while pending, or the
+    name of the step under way.
+    """
+    if state.status in ("live", "done"):
+        return success
+    if state.status == "failed":
+        return f"{verb} failed: {state.error}"
+    if state.status == "pending":
         return "queued, waiting for a worker"
-    return site.step or "deploying"
+    return state.step or working
+
+
+def _progress_message(site: website.Website) -> str:
+    return _chain_message(
+        site, success=f"live at {site.url}", verb="deployment", working="deploying"
+    )
 
 
 def _file_progress_message(state: website.FileWrite) -> str:
-    """One line saying where the write is, for a progress notification."""
-    if state.status == "done":
-        return f"written to {state.url}"
-    if state.status == "failed":
-        return f"write failed: {state.error}"
-    if state.status == "pending":
-        return "queued, waiting for a worker"
-    return state.step or "working"
+    return _chain_message(
+        state, success=f"written to {state.url}", verb="write", working="working"
+    )
 
 
 def _file_deletion_progress_message(state: website.FileDeletion) -> str:
-    """One line saying where the deletion is, for a progress notification."""
-    if state.status == "done":
-        return f"deleted {state.path} from the site"
-    if state.status == "failed":
-        return f"deletion failed: {state.error}"
-    if state.status == "pending":
-        return "queued, waiting for a worker"
-    return state.step or "working"
+    return _chain_message(
+        state,
+        success=f"deleted {state.path} from the site",
+        verb="deletion",
+        working="working",
+    )
 
 
 async def _follow[S](

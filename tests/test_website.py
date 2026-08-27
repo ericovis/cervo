@@ -170,24 +170,6 @@ def test_a_live_site_is_not_deployed_again():
         assert conn.execute("SELECT count(*) c FROM job").fetchone()["c"] == 3
 
 
-def test_a_legacy_single_job_deployment_still_reads_as_live():
-    """Rows queued before the chain existed keep an old site's status right."""
-    with connect() as conn:
-        owner = user.ensure(conn, OWNER)
-        website.create(conn, "old-timer", owner)
-        conn.execute("DELETE FROM job")
-        job.enqueue(conn, website.DEPLOY_KIND, {"slug": "old-timer"})
-        conn.execute("UPDATE job SET status = 'done'")
-
-    with connect() as conn:
-        site = website.get(conn, "old-timer")
-        with pytest.raises(website.WebsiteError, match="live"):
-            website.create(conn, "old-timer", owner)
-
-    assert site.status == "live"
-    assert site.steps_done == site.steps_total
-
-
 def test_a_site_cannot_point_at_a_user_who_does_not_exist():
     """The foreign key is enforced, not decorative."""
     with pytest.raises(sqlite3.IntegrityError), connect() as conn:

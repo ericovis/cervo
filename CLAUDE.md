@@ -149,9 +149,7 @@ and writes the default `index.html` (only if missing — an owner's replaced
 files are never clobbered), `website.configure` regenerates the whole Caddyfile
 from the database, and `website.activate` POSTs it to caddy's `/load` admin
 endpoint. Every step is idempotent, so retrying is always safe — and only the
-failed step retries, not the whole chain. Rows with the legacy single-job kind
-`website.deploy` (from before the chain) are still read and handled, so old
-sites keep their status.
+failed step retries, not the whole chain.
 
 Because the deployment is now stepwise, a site also reports `step`,
 `steps_done`, and `steps_total`, and `create_website` streams real-time

@@ -25,12 +25,6 @@ CONFIGURE_KIND = "website.configure"
 ACTIVATE_KIND = "website.activate"
 DEPLOY_CHAIN = (PROVISION_KIND, CONFIGURE_KIND, ACTIVATE_KIND)
 
-# Deployments queued before the chain existed ran as this single job; rows
-# with this kind still exist, so reading them keeps old sites' status right.
-DEPLOY_KIND = "website.deploy"
-
-_ALL_DEPLOY_KINDS = (*DEPLOY_CHAIN, DEPLOY_KIND)
-
 # What each step of the chain is doing, in words fit for a progress report.
 _STEP_LABELS = {
     PROVISION_KIND: "writing the site's files",
@@ -62,15 +56,6 @@ _ALLOWED_SUFFIXES = frozenset({".html", ".css"})
 # DATA_DIR/caddyfile would collide with the rendered DATA_DIR/Caddyfile on a
 # case-insensitive filesystem (macOS development).
 _RESERVED = frozenset({"caddyfile"})
-
-# How a legacy single-job deployment's status reads as a site's status.
-_STATUS: dict[str, WebsiteStatus] = {
-    "pending": "pending",
-    "running": "deploying",
-    "done": "live",
-    "failed": "failed",
-}
-
 
 # How a chain job's generic status reads as a site's status.
 _SITE_STATUS: dict[str, WebsiteStatus] = {
@@ -108,7 +93,7 @@ def create(conn: sqlite3.Connection, slug: str, owner: User) -> Website:
     if existing.user_id != owner.id:
         raise WebsiteError(f"The slug {slug!r} is already taken.")
 
-    deployment = job.latest_of(conn, _ALL_DEPLOY_KINDS, {"slug": slug})
+    deployment = job.latest_of(conn, DEPLOY_CHAIN, {"slug": slug})
     if deployment is None or deployment.status == "failed":
         job.enqueue(conn, DEPLOY_CHAIN[0], {"slug": slug})
         return _with_deployment(conn, existing)
@@ -374,7 +359,7 @@ def _file_write(slug: str, path: str, link: job.Job) -> FileWrite:
 
 def _with_deployment(conn: sqlite3.Connection, site: Website) -> Website:
     """The site carrying the state of its latest deployment job."""
-    deployment = job.latest_of(conn, _ALL_DEPLOY_KINDS, {"slug": site.slug})
+    deployment = job.latest_of(conn, DEPLOY_CHAIN, {"slug": site.slug})
     if deployment is None:
         return site
     return site.model_copy(update=_deployment_state(deployment))
@@ -383,20 +368,8 @@ def _with_deployment(conn: sqlite3.Connection, site: Website) -> Website:
 def _deployment_state(deployment: job.Job) -> dict:
     """How a deployment job reads as a site's status, error, and step.
 
-    A chain job also says how far along the pipeline the site is; a legacy
-    single-job deployment is all-or-nothing.
+    The job also says how far along the chain the site is.
     """
-    if deployment.kind == DEPLOY_KIND:
-        total = len(DEPLOY_CHAIN)
-        status = _STATUS[deployment.status]
-        done = total if status == "live" else 0
-        return {
-            "error": deployment.error,
-            "steps_total": total,
-            "step": None,
-            "status": status,
-            "steps_done": done,
-        }
     state = _chain_state(DEPLOY_CHAIN, _STEP_LABELS, deployment)
     return {**state, "status": _SITE_STATUS[state["status"]]}
 
