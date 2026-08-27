@@ -64,6 +64,13 @@ WHERE id = ?
 RETURNING *
 """
 
+_MARK_FAILED = """
+UPDATE job
+SET status = 'failed', error = :error, times_out_at = NULL, next_attempt_at = NULL
+WHERE id = :id
+RETURNING *
+"""
+
 _RECORD_FAILURE = """
 UPDATE job
 SET attempts = attempts + 1,
@@ -154,6 +161,12 @@ def claim_due(conn: sqlite3.Connection) -> Job | None:
 def mark_done(conn: sqlite3.Connection, job_id: int) -> Job:
     """Record that the job finished successfully."""
     return _from_row(conn.execute(_MARK_DONE, (job_id,)).fetchone())
+
+
+def mark_failed(conn: sqlite3.Connection, job_id: int, error: str) -> Job:
+    """Fail the job for good, no matter how many attempts remain."""
+    row = conn.execute(_MARK_FAILED, {"id": job_id, "error": error}).fetchone()
+    return _from_row(row)
 
 
 def record_failure(

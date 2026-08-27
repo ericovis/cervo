@@ -56,6 +56,10 @@ def run_once() -> bool:
         if handler is None:
             raise RuntimeError(f"no handler for job kind {claimed.kind!r}")
         handler(claimed.payload)
+    except job.PermanentError as error:
+        _log.warning("job %d (%s) failed for good: %s", claimed.id, claimed.kind, error)
+        with connect() as conn:
+            job.fail_permanently(conn, claimed.id, str(error))
     except Exception as error:  # noqa: BLE001 — recorded on the job, retried
         _log.warning("job %d (%s) failed: %s", claimed.id, claimed.kind, error)
         with connect() as conn:
@@ -115,6 +119,50 @@ def _deploy_website(payload: dict[str, Any]) -> None:
     _activate_website(payload)
 
 
+def _validate_file(payload: dict[str, Any]) -> None:
+    """Check a submitted file before anything touches the disk.
+
+    Nothing in the payload is trusted, even though the server checked it
+    once — the path and size are re-checked here, in the process that will
+    write. Every failure is a verdict, not an accident, so the job fails
+    for good instead of retrying.
+    """
+    slug, path, content = payload["slug"], payload["path"], payload["content"]
+    with connect() as conn:
+        gone = not website.exists(conn, slug)
+    if gone:
+        raise job.PermanentError(f"the site {slug!r} was deleted")
+    try:
+        website.file_target(slug, path)
+        if len(content.encode("utf-8")) > website.MAX_FILE_BYTES:
+            raise website.WebsiteError("Files are limited to 1 MiB.")
+        website.check_content(path, content)
+    except website.WebsiteError as error:
+        raise job.PermanentError(str(error)) from error
+
+
+def _write_file(payload: dict[str, Any]) -> None:
+    """Write a validated file into its site's directory.
+
+    The site is checked again right before writing: a deleted site's
+    directory must not be resurrected — the freed slug could already
+    belong to someone else. (The window between this check and the write
+    is accepted.) Rewriting the same content makes a retried step safe;
+    caddy's file_server picks the file up with no reload.
+    """
+    slug, path, content = payload["slug"], payload["path"], payload["content"]
+    with connect() as conn:
+        gone = not website.exists(conn, slug)
+    if gone:
+        raise job.PermanentError(f"the site {slug!r} was deleted")
+    try:
+        target = website.file_target(slug, path)
+    except website.WebsiteError as error:
+        raise job.PermanentError(str(error)) from error
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content)
+
+
 def _delete_website(payload: dict[str, Any]) -> None:
     """Stop routing a deleted site and remove its files.
 
@@ -139,10 +187,15 @@ _HANDLERS = {
     website.ACTIVATE_KIND: _activate_website,
     website.DEPLOY_KIND: _deploy_website,
     website.DELETE_KIND: _delete_website,
+    website.VALIDATE_FILE_KIND: _validate_file,
+    website.WRITE_FILE_KIND: _write_file,
 }
 
-# The deployment chain: finishing one step enqueues the next.
-_NEXT = dict(zip(website.DEPLOY_CHAIN, website.DEPLOY_CHAIN[1:], strict=False))
+# The chains: finishing one step enqueues the next.
+_NEXT = {
+    **dict(zip(website.DEPLOY_CHAIN, website.DEPLOY_CHAIN[1:], strict=False)),
+    **dict(zip(website.FILE_CHAIN, website.FILE_CHAIN[1:], strict=False)),
+}
 
 
 def _heal() -> None:

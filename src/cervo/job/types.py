@@ -7,6 +7,15 @@ from pydantic import BaseModel
 JobStatus = Literal["pending", "running", "done", "failed"]
 
 
+class PermanentError(Exception):
+    """Raised by a handler to say retrying cannot help.
+
+    The job is failed for good on the first raise — no retries — with the
+    message as its error. For failures that are verdicts, not accidents:
+    content that does not validate, a site that no longer exists.
+    """
+
+
 class Job(BaseModel):
     """One unit of background work, run by the worker process.
 

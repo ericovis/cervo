@@ -36,6 +36,7 @@ CALLBACK = "http://localhost:33418/callback"
 
 TOOLS = {
     "create_website",
+    "write_file",
     "list_websites",
     "delete_website",
     "website_status",
@@ -261,6 +262,43 @@ async def test_a_site_is_created_deployed_and_served():
     )
     assert slug in page
     assert "cervo" in page
+
+
+async def test_a_written_file_is_served():
+    """write_file puts an owner's page online; bad paths never get that far."""
+    email = f"{unique('writer')}@example.com"
+    slug = unique("written")
+    content = "<!doctype html><title>smoke</title><h1>written by hand</h1>"
+    async with chat(email) as client:
+        site = await client.call_tool("create_website", {"slug": slug})
+        if site.structured_content["status"] != "live":
+            await wait_for_deployment(client, slug)
+
+        result = await client.call_tool(
+            "write_file",
+            {"slug": slug, "path": "blog/post.html", "content": content},
+        )
+        write = result.structured_content
+        assert write["status"] in ("done", "pending"), write
+        assert write["url"] == f"http://{slug}.{DOMAIN}/blog/post.html"
+
+        with pytest.raises(ToolError):
+            await client.call_tool(
+                "write_file",
+                {"slug": slug, "path": "../escape.html", "content": content},
+            )
+        with pytest.raises(ToolError):
+            await client.call_tool(
+                "write_file",
+                {"slug": slug, "path": "script.js", "content": content},
+            )
+
+    page = _wait_for(
+        lambda: _get(f"http://{DOMAIN}/blog/post.html", host=f"{slug}.{DOMAIN}"),
+        "the written file to be served",
+        timeout=15,
+    )
+    assert "written by hand" in page
 
 
 async def test_a_followed_creation_reports_progress_and_returns_live():

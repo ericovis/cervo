@@ -1,12 +1,15 @@
 import asyncio
 import sqlite3
+from collections.abc import Callable
 from time import monotonic
+from typing import Annotated
 
 from fastmcp import Context, FastMCP
 from fastmcp.apps import AppConfig, ResourceCSP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_access_token
 from jinja2 import Environment, PackageLoader
+from pydantic import Field
 
 from cervo import auth, user, web, website
 from cervo.db import connect
@@ -74,33 +77,59 @@ def _progress_message(site: website.Website) -> str:
     return site.step or "deploying"
 
 
-async def _follow_deployment(ctx: Context, site: website.Website) -> website.Website:
-    """Follow the deployment chain, reporting each step as progress.
+def _file_progress_message(state: website.FileWrite) -> str:
+    """One line saying where the write is, for a progress notification."""
+    if state.status == "done":
+        return f"written to {state.url}"
+    if state.status == "failed":
+        return f"write failed: {state.error}"
+    if state.status == "pending":
+        return "queued, waiting for a worker"
+    return state.step or "working"
+
+
+async def _follow[S](
+    ctx: Context,
+    state: S,
+    refresh: Callable[[S], S],
+    message: Callable[[S], str],
+    terminal: tuple[str, ...],
+) -> S:
+    """Follow a chain of background work, reporting each step as progress.
 
     Only when a progress token came with the call (most clients send one by
     default) — without it the reports would vanish, so the tool returns
-    immediately and the deployment app (or list_websites) follows instead.
-    Either way the worker keeps going: this only watches, for at most
-    ``_FOLLOW_FOR`` seconds, then hands back whatever state the site is in.
+    immediately and something else follows instead. Either way the worker
+    keeps going: this only watches, for at most ``_FOLLOW_FOR`` seconds,
+    then hands back whatever state the work is in.
     """
     if not _wants_progress(ctx):
-        return site
+        return state
     deadline = monotonic() + _FOLLOW_FOR
     reported = None
     while True:
-        state = (site.steps_done, site.status)
-        if state != reported:
-            reported = state
+        seen = (state.steps_done, state.status)
+        if seen != reported:
+            reported = seen
             await ctx.report_progress(
-                progress=site.steps_done,
-                total=site.steps_total or None,
-                message=_progress_message(site),
+                progress=state.steps_done,
+                total=state.steps_total or None,
+                message=message(state),
             )
-        if site.status in ("live", "failed") or monotonic() >= deadline:
-            return site
+        if state.status in terminal or monotonic() >= deadline:
+            return state
         await asyncio.sleep(_FOLLOW_POLL)
+        state = refresh(state)
+
+
+async def _follow_deployment(ctx: Context, site: website.Website) -> website.Website:
+    """Follow the deployment chain, reporting each step as progress."""
+
+    def refresh(current: website.Website) -> website.Website:
         with connect() as conn:
-            site = website.get(conn, site.slug) or site  # deleted mid-watch
+            return website.get(conn, current.slug) or current  # deleted mid-watch
+
+    return await _follow(ctx, site, refresh, _progress_message, ("live", "failed"))
 
 
 @app.tool(app=AppConfig(resource_uri=_DEPLOYMENT_URI))
@@ -124,6 +153,43 @@ async def create_website(slug: website.Slug, ctx: Context) -> website.Website:
     except AppError as error:
         raise ToolError(str(error)) from error
     return await _follow_deployment(ctx, site)
+
+
+@app.tool
+async def write_file(
+    slug: website.Slug,
+    path: website.FilePath,
+    content: Annotated[str, Field(max_length=1_048_576)],
+    ctx: Context,
+) -> website.FileWrite:
+    """Write an HTML or CSS file into a site the connected account owns.
+
+    The file goes to ``path`` inside the site — a relative path like
+    "blog/post.html" or "css/main.css"; lowercase, no leading slash, no
+    "..". Subfolders are created as needed, and writing to an existing
+    path (index.html included) replaces that file. Only .html and .css
+    files up to 1 MiB are accepted; anything else is refused immediately.
+
+    The write runs in the background: the content is checked, then
+    written. A call that asked for progress follows along — each step is
+    reported as it happens — and normally returns the file already "done",
+    served at its url. Otherwise it returns status "pending" right away.
+    Report a "failed" status's error to the user: the content did not pass
+    validation, or the site was deleted meanwhile.
+    """
+    try:
+        with connect() as conn:
+            state = website.submit_file(conn, slug, path, content, _owner(conn))
+    except AppError as error:
+        raise ToolError(str(error)) from error
+
+    def refresh(current: website.FileWrite) -> website.FileWrite:
+        with connect() as conn:
+            return website.file_state(conn, slug, path, content) or current
+
+    return await _follow(
+        ctx, state, refresh, _file_progress_message, ("done", "failed")
+    )
 
 
 @app.tool(app=AppConfig(resource_uri=_WEBSITES_URI))

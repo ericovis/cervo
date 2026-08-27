@@ -48,6 +48,11 @@ def fail(conn: sqlite3.Connection, job_id: int, error: str) -> Job:
     return _dao.record_failure(conn, job_id, error, _MAX_ATTEMPTS, _RETRY_DELAY)
 
 
+def fail_permanently(conn: sqlite3.Connection, job_id: int, error: str) -> Job:
+    """Fail the job for good — for failures retrying cannot help."""
+    return _dao.mark_failed(conn, job_id, error)
+
+
 def reap(conn: sqlite3.Connection) -> int:
     """Reclaim timed-out running jobs. Returns how many were reclaimed."""
     return _dao.reap(conn, _MAX_ATTEMPTS, _RETRY_DELAY)

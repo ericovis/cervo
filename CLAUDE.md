@@ -169,6 +169,18 @@ mid-job needs no shutdown protocol. At startup the worker also "heals": it
 renders and reloads the Caddyfile even with no jobs queued, so a fresh checkout
 or restored data directory starts serving immediately.
 
+Writing a file (`write_file`, owner-only) reuses the same machinery as its
+own chain: the tool fast-fails anything structurally wrong — only relative
+lowercase `.html`/`.css` paths, no `..`/`\`/leading `/`, at most 1 MiB —
+and queues `website.validate_file` (content sanity: real UTF-8 text that
+survives the stdlib HTML tokenizer or a small CSS scanner; nothing is
+executed) followed by `website.write_file`, which re-checks the path and
+that the site still exists before writing (`website.file_target` is the one
+safe join, used by both server and worker). Validation failures raise
+`job.PermanentError` — failed for good, no retries. No caddy step: the file
+server picks new files up immediately. A future virus-scan step is one more
+entry in `FILE_CHAIN`.
+
 Deleting a website (`delete_website`, owner-only) is the mirror image: the
 row is deleted immediately — the slug frees up and the site stops being
 listed — and a `website.delete` job has the worker re-render the Caddyfile

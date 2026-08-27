@@ -9,20 +9,23 @@ from cervo.job.service import (
     create_tables,
     enqueue,
     fail,
+    fail_permanently,
     latest,
     latest_of,
     reap,
     succeed,
 )
-from cervo.job.types import Job, JobStatus
+from cervo.job.types import Job, JobStatus, PermanentError
 
 __all__ = [
     "Job",
     "JobStatus",
+    "PermanentError",
     "claim_due",
     "create_tables",
     "enqueue",
     "fail",
+    "fail_permanently",
     "latest",
     "latest_of",
     "reap",

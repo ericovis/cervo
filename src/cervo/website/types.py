@@ -19,6 +19,18 @@ Slug = Annotated[
 
 WebsiteStatus = Literal["pending", "deploying", "live", "failed"]
 
+FilePath = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=200,
+        pattern=r"^(?:[a-z0-9][a-z0-9._-]*/)*[a-z0-9][a-z0-9._-]*\.(?:html|css)$",
+        description="Path inside the site, e.g. 'blog/post.html' or 'css/main.css'.",
+    ),
+]
+
+FileStatus = Literal["pending", "working", "done", "failed"]
+
 
 class Website(BaseModel):
     """A static website hosted on the VPS, owned by exactly one user.
@@ -45,3 +57,27 @@ class Website(BaseModel):
     def url(self) -> str:
         """Where the site is served once its deployment is live."""
         return config.origin(f"{self.slug}.{config.DOMAIN}")
+
+
+class FileWrite(BaseModel):
+    """A file submitted for writing into a site, and how that work stands.
+
+    Like a deployment, the write runs as a chain of jobs; ``status``,
+    ``error``, and the step fields describe the latest job of that chain,
+    filled in by the service whenever the state is read.
+    """
+
+    slug: Slug
+    path: FilePath
+    status: FileStatus = "pending"
+    error: str | None = None
+    step: str | None = None
+    steps_done: int = 0
+    steps_total: int = 0
+
+    @computed_field
+    @property
+    def url(self) -> str:
+        """Where the file is served once it is written."""
+        site = config.origin(f"{self.slug}.{config.DOMAIN}")
+        return f"{site}/{self.path}"
