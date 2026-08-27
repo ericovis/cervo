@@ -14,6 +14,8 @@ to advertise CIMD support, since claude.ai only tries it when both
 announced.
 """
 
+import sqlite3
+
 from fastmcp.server.auth import AccessToken, OAuthProvider
 from fastmcp.server.auth.cimd import CIMDClientManager
 from mcp.server.auth.handlers.metadata import MetadataHandler
@@ -28,9 +30,8 @@ from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOption
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from starlette.routing import Route
 
-from cervo import config
+from cervo import config, db
 from cervo.auth import service
-from cervo.db import connect
 
 
 class CervoOAuthProvider(OAuthProvider):
@@ -49,24 +50,25 @@ class CervoOAuthProvider(OAuthProvider):
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
         if self._cimd.is_cimd_client_id(client_id):
             return await self._cimd.get_client(client_id)
-        with connect() as conn:
-            data = service.get_client(conn, client_id)
+        data = await db.transact(lambda conn: service.get_client(conn, client_id))
         if data is None:
             return None
         return OAuthClientInformationFull.model_validate_json(data)
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
-        with connect() as conn:
-            service.save_client(
+        await db.transact(
+            lambda conn: service.save_client(
                 conn, client_info.client_id, client_info.model_dump_json()
             )
+        )
 
     async def authorize(
         self, client: OAuthClientInformationFull, params: AuthorizationParams
     ) -> str:
         """Park the request and send the browser to the verification pages."""
-        with connect() as conn:
-            txn = service.begin(
+
+        def begin(conn: sqlite3.Connection):
+            return service.begin(
                 conn,
                 client_id=client.client_id,
                 redirect_uri=str(params.redirect_uri),
@@ -76,21 +78,25 @@ class CervoOAuthProvider(OAuthProvider):
                 code_challenge=params.code_challenge,
                 resource=params.resource,
             )
+
+        txn = await db.transact(begin)
         return f"{config.origin()}/verify?txn={txn.txn_id}"
 
     async def load_authorization_code(
         self, client: OAuthClientInformationFull, authorization_code: str
     ) -> AuthorizationCode | None:
-        with connect() as conn:
-            return service.load_code(conn, authorization_code)
+        return await db.transact(
+            lambda conn: service.load_code(conn, authorization_code)
+        )
 
     async def exchange_authorization_code(
         self,
         client: OAuthClientInformationFull,
         authorization_code: AuthorizationCode,
     ) -> OAuthToken:
-        with connect() as conn:
-            tokens = service.exchange_code(conn, authorization_code)
+        tokens = await db.transact(
+            lambda conn: service.exchange_code(conn, authorization_code)
+        )
         if tokens is None:
             raise TokenError(
                 "invalid_grant", "authorization code was already used or has expired"
@@ -100,8 +106,7 @@ class CervoOAuthProvider(OAuthProvider):
     async def load_refresh_token(
         self, client: OAuthClientInformationFull, refresh_token: str
     ) -> RefreshToken | None:
-        with connect() as conn:
-            return service.load_refresh(conn, refresh_token)
+        return await db.transact(lambda conn: service.load_refresh(conn, refresh_token))
 
     async def exchange_refresh_token(
         self,
@@ -109,15 +114,15 @@ class CervoOAuthProvider(OAuthProvider):
         refresh_token: RefreshToken,
         scopes: list[str],
     ) -> OAuthToken:
-        with connect() as conn:
-            tokens = service.exchange_refresh(conn, refresh_token, scopes)
+        tokens = await db.transact(
+            lambda conn: service.exchange_refresh(conn, refresh_token, scopes)
+        )
         if tokens is None:
             raise TokenError("invalid_grant", "refresh token is no longer valid")
         return tokens
 
     async def load_access_token(self, token: str) -> AccessToken | None:
-        with connect() as conn:
-            identity = service.load_access(conn, token)
+        identity = await db.transact(lambda conn: service.load_access(conn, token))
         if identity is None:
             return None
         return AccessToken(
@@ -130,8 +135,7 @@ class CervoOAuthProvider(OAuthProvider):
         )
 
     async def revoke_token(self, token: AccessToken | RefreshToken) -> None:
-        with connect() as conn:
-            service.revoke(conn, token.token)
+        await db.transact(lambda conn: service.revoke(conn, token.token))
 
     def get_routes(self, mcp_path: str | None = None) -> list[Route]:
         """The SDK's routes, with the metadata rebuilt to advertise CIMD."""

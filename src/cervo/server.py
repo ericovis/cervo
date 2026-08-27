@@ -11,7 +11,7 @@ from fastmcp.server.dependencies import get_access_token
 from jinja2 import Environment, PackageLoader
 from pydantic import Field
 
-from cervo import auth, user, web, website
+from cervo import auth, db, user, web, website
 from cervo.db import connect
 from cervo.errors import AppError
 
@@ -113,7 +113,7 @@ def _file_deletion_progress_message(state: website.FileDeletion) -> str:
 async def _follow[S](
     ctx: Context,
     state: S,
-    refresh: Callable[[S], S],
+    refresh: Callable[[sqlite3.Connection, S], S],
     message: Callable[[S], str],
     terminal: tuple[str, ...],
 ) -> S:
@@ -141,15 +141,14 @@ async def _follow[S](
         if state.status in terminal or monotonic() >= deadline:
             return state
         await asyncio.sleep(_FOLLOW_POLL)
-        state = refresh(state)
+        state = await db.transact(lambda conn, current=state: refresh(conn, current))
 
 
 async def _follow_deployment(ctx: Context, site: website.Website) -> website.Website:
     """Follow the deployment chain, reporting each step as progress."""
 
-    def refresh(current: website.Website) -> website.Website:
-        with connect() as conn:
-            return website.get(conn, current.slug) or current  # deleted mid-watch
+    def refresh(conn: sqlite3.Connection, current: website.Website) -> website.Website:
+        return website.get(conn, current.slug) or current  # deleted mid-watch
 
     return await _follow(ctx, site, refresh, _progress_message, ("live", "failed"))
 
@@ -170,8 +169,7 @@ async def create_website(slug: website.Slug, ctx: Context) -> website.Website:
     the slug of your own failed site queues a fresh deployment.
     """
     try:
-        with connect() as conn:
-            site = website.create(conn, slug, _owner(conn))
+        site = await db.transact(lambda conn: website.create(conn, slug, _owner(conn)))
     except AppError as error:
         raise ToolError(str(error)) from error
     return await _follow_deployment(ctx, site)
@@ -199,16 +197,20 @@ async def write_file(
     Report a "failed" status's error to the user: the content did not pass
     validation, or the site was deleted meanwhile.
     """
+
+    def submit(conn: sqlite3.Connection) -> tuple[user.User, website.FileWrite]:
+        owner = _owner(conn)
+        return owner, website.submit_file(conn, slug, path, content, owner)
+
     try:
-        with connect() as conn:
-            owner = _owner(conn)
-            state = website.submit_file(conn, slug, path, content, owner)
+        owner, state = await db.transact(submit)
     except AppError as error:
         raise ToolError(str(error)) from error
 
-    def refresh(current: website.FileWrite) -> website.FileWrite:
-        with connect() as conn:
-            return website.file_state(conn, slug, path, content, owner.id) or current
+    def refresh(
+        conn: sqlite3.Connection, current: website.FileWrite
+    ) -> website.FileWrite:
+        return website.file_state(conn, slug, path, content, owner.id) or current
 
     return await _follow(
         ctx, state, refresh, _file_progress_message, ("done", "failed")
@@ -235,16 +237,20 @@ async def delete_file(
     the site. Otherwise it returns status "pending" right away. Report a
     "failed" status's error to the user: the site was deleted meanwhile.
     """
+
+    def submit(conn: sqlite3.Connection) -> tuple[user.User, website.FileDeletion]:
+        owner = _owner(conn)
+        return owner, website.submit_file_deletion(conn, slug, path, owner)
+
     try:
-        with connect() as conn:
-            owner = _owner(conn)
-            state = website.submit_file_deletion(conn, slug, path, owner)
+        owner, state = await db.transact(submit)
     except AppError as error:
         raise ToolError(str(error)) from error
 
-    def refresh(current: website.FileDeletion) -> website.FileDeletion:
-        with connect() as conn:
-            return website.file_deletion_state(conn, slug, path, owner.id) or current
+    def refresh(
+        conn: sqlite3.Connection, current: website.FileDeletion
+    ) -> website.FileDeletion:
+        return website.file_deletion_state(conn, slug, path, owner.id) or current
 
     return await _follow(
         ctx, state, refresh, _file_deletion_progress_message, ("done", "failed")

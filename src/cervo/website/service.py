@@ -32,6 +32,12 @@ _STEP_LABELS = {
     ACTIVATE_KIND: "routing traffic to the site",
 }
 
+# The Caddyfile and caddy itself are shared by every site, so the jobs that
+# rewrite or reload them run one at a time, however many workers there are.
+job.serialize(CONFIGURE_KIND)
+job.serialize(ACTIVATE_KIND)
+job.serialize(DELETE_KIND)
+
 # Writing a file into a site is its own chain, so it can grow more steps
 # (a virus scan, say) without touching the queue machinery.
 VALIDATE_FILE_KIND = "website.validate_file"

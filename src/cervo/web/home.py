@@ -3,14 +3,12 @@
 from fasthtml.common import A, P
 from starlette.responses import HTMLResponse
 
-from cervo import config, website
-from cervo.db import connect
+from cervo import config, db, website
 from cervo.web import layout
 
 
-def home_page() -> HTMLResponse:
-    with connect() as conn:
-        sites = website.live(conn)
+async def home_page() -> HTMLResponse:
+    sites = await db.transact(website.live)
 
     mcp_url = f"{config.origin()}/mcp"
     return layout.page(

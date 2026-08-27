@@ -10,6 +10,7 @@ compose network can reach, so the running container is never replaced.
 import os
 import urllib.error
 import urllib.request
+from uuid import uuid4
 
 from jinja2 import Environment, PackageLoader
 
@@ -35,8 +36,10 @@ def render(sites: list[Website]) -> None:
     )
     caddyfile = _caddyfile_path()
     caddyfile.parent.mkdir(parents=True, exist_ok=True)
-    # Swapped in whole, so caddy never reads a half-written file.
-    scratch = caddyfile.with_name("Caddyfile.rendering")
+    # Swapped in whole, so caddy never reads a half-written file — and the
+    # scratch name is unique per render, so no two writers (threads,
+    # processes, or containers sharing the volume) ever trample each other's.
+    scratch = caddyfile.with_name(f"Caddyfile.rendering.{uuid4().hex}")
     scratch.write_text(text)
     os.replace(scratch, caddyfile)
 

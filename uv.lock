@@ -138,6 +138,7 @@ dependencies = [
     { name = "pydantic", extra = ["email"] },
     { name = "python-decouple" },
     { name = "python-fasthtml" },
+    { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
@@ -154,6 +155,7 @@ requires-dist = [
     { name = "pydantic", extras = ["email"], specifier = ">=2.13.4" },
     { name = "python-decouple", specifier = ">=3.8" },
     { name = "python-fasthtml", specifier = ">=0.14.12" },
+    { name = "uvicorn", specifier = ">=0.52.4" },
 ]
 
 [package.metadata.requires-dev]

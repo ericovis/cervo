@@ -7,7 +7,7 @@ alone.
 
 import asyncio
 
-from cervo import caddy, server, user, website, worker
+from cervo import caddy, job, server, user, website, worker
 from cervo.db import connect
 from tests.conftest import OWNER, call, chat, deploy
 
@@ -294,3 +294,16 @@ def test_a_stale_site_deletion_spares_a_reclaimed_slug(
     assert marker.exists()  # the newcomer's files are untouched
     assert marker.read_text() == "newcomer's page"
     assert not (data_dir / "stubborn").exists()
+
+
+def test_caddyfile_updates_run_one_at_a_time():
+    """The kinds that rewrite or reload the shared Caddyfile are serialized."""
+    with connect() as conn:
+        first = job.enqueue(conn, website.CONFIGURE_KIND, {"slug": "one"})
+        job.enqueue(conn, website.CONFIGURE_KIND, {"slug": "two"})
+
+    with connect() as conn:
+        claimed = job.claim_due(conn)
+    assert claimed is not None and claimed.id == first.id
+    with connect() as conn:
+        assert job.claim_due(conn) is None, "a second Caddyfile rewrite must wait"

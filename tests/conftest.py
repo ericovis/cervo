@@ -252,7 +252,7 @@ class chat:
         self._email = email
 
     async def __aenter__(self) -> Client:
-        self._http = app.http_app()
+        self._http = app.http_app(stateless_http=True)
         self._lifespan = self._http.router.lifespan_context(self._http)
         await self._lifespan.__aenter__()
         async with web_client(self._http) as web:
@@ -297,7 +297,7 @@ class serving:
     """The server's ASGI app with its lifespan running, for raw HTTP tests."""
 
     async def __aenter__(self):
-        self._http = app.http_app()
+        self._http = app.http_app(stateless_http=True)
         self._lifespan = self._http.router.lifespan_context(self._http)
         await self._lifespan.__aenter__()
         self._web = web_client(self._http)

@@ -17,6 +17,10 @@ services:
   app:
     build: .
     restart: unless-stopped
+    # Two uvicorn workers, so the suite proves what makes several safe:
+    # stateless MCP and SQLite in WAL — every request may land anywhere.
+    environment:
+      WEB_CONCURRENCY: 2
     volumes:
       - data:/mnt/data
     depends_on:
@@ -27,6 +31,10 @@ services:
     build: .
     command: cervo-worker
     restart: unless-stopped
+    # Two polling threads, so the suite exercises concurrent claiming and
+    # the one-at-a-time rule for the Caddyfile jobs.
+    environment:
+      WORKER_CONCURRENCY: 2
     volumes:
       - data:/mnt/data
   # Seeding a stub Caddyfile keeps caddy from crash-looping on the fresh

@@ -13,8 +13,7 @@ from pydantic import EmailStr, TypeAdapter, ValidationError
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 
-from cervo import auth
-from cervo.db import connect
+from cervo import auth, db
 from cervo.web import layout
 
 _EMAIL = TypeAdapter(EmailStr)
@@ -41,11 +40,10 @@ _FORM_CSS = """
 """
 
 
-def verify_page(request: Request) -> Response:
+async def verify_page(request: Request) -> Response:
     """The state of the sign-in: ask for an email, or for the mailed code."""
     txn_id = request.query_params.get("txn", "")
-    with connect() as conn:
-        txn = auth.transaction(conn, txn_id)
+    txn = await db.transact(lambda conn: auth.transaction(conn, txn_id))
     if txn is None:
         return _no_store(_gone_page())
     if txn.email is None or "change" in request.query_params:
@@ -70,9 +68,10 @@ async def submit_email(request: Request) -> Response:
             )
         )
 
+    # The transaction thread also carries the SMTP send inside send_code,
+    # so the mail server's latency never lands on the event loop.
     try:
-        with connect() as conn:
-            auth.send_code(conn, txn_id, address)
+        await db.transact(lambda conn: auth.send_code(conn, txn_id, address))
     except auth.AuthError:
         return _no_store(_gone_page())
     return _no_store(RedirectResponse(f"/verify?txn={txn_id}", status_code=303))
@@ -84,16 +83,14 @@ async def submit_code(request: Request) -> Response:
     txn_id = str(form.get("txn", ""))
     code = str(form.get("code", ""))
 
-    with connect() as conn:
-        txn = auth.transaction(conn, txn_id)
+    txn = await db.transact(lambda conn: auth.transaction(conn, txn_id))
     if txn is None or txn.email is None:
         return _no_store(_gone_page())
 
     # The connection closes before the error is rendered, so a refusal still
     # commits the attempt it recorded on the way (see cervo.errors.AppError).
     try:
-        with connect() as conn:
-            callback = auth.confirm(conn, txn_id, code)
+        callback = await db.transact(lambda conn: auth.confirm(conn, txn_id, code))
     except auth.AuthError as error:
         if "attempts left" in str(error):
             return _no_store(_code_page(txn_id, txn.email, error=str(error)))

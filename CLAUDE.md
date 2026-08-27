@@ -12,8 +12,14 @@ bin/dev    # docker compose up -d — the whole environment
 
 The stack is four services, all sharing the `.data` volume at `/mnt/data`:
 
-- `app` — the MCP server and the public website, one process. Publishes no port; caddy reverse-proxies it at `http://localhost` — the homepage (with docs at `/docs`) — and the MCP endpoint stays `http://localhost/mcp`.
-- `worker` — the job worker (`cervo-worker`). Boots first, creates the database tables, and renders the initial Caddyfile.
+- `app` — the MCP server and the public website, one service: uvicorn with
+  `WEB_CONCURRENCY` worker processes (default 1) importing `cervo.asgi` —
+  MCP runs stateless, so any worker serves any request. Publishes no port; caddy reverse-proxies it at `http://localhost` — the homepage (with docs at `/docs`) — and the MCP endpoint stays `http://localhost/mcp`.
+- `worker` — the job worker (`cervo-worker`): one container running
+  `WORKER_CONCURRENCY` polling threads (default 1) — claiming is atomic in
+  the database, so more threads never double-run a job. Boots first, creates
+  the database tables, and renders the initial Caddyfile (once, before any
+  thread polls).
 - `caddy` — the front door on ports 80/443. Runs on the generated `/mnt/data/Caddyfile` and serves the sites at `http://{slug}.localhost`. Its unauthenticated admin API (`caddy:2019`) is reachable only on the compose network. On a fresh checkout it restarts until the worker first renders the Caddyfile — that's the `restart: unless-stopped` doing its job, not a bug.
 - `mail` — mailcatcher (SMTP on 1025, web UI at http://localhost:1080). Development mail — the sign-in codes — goes here, not to real SMTP.
 
@@ -35,6 +41,8 @@ What actually varies between environments is read from the environment / `.env` 
 | `DOMAIN` | `localhost` | cervo is served at `{SCHEME}://{DOMAIN}`, sites at `{SCHEME}://{slug}.{DOMAIN}` |
 | `SCHEME` | `http` | `https` in production: caddy then gets a certificate per hostname (persisted in its `/data` volume) and redirects plain http |
 | `ACME_EMAIL` | *(empty)* | contact caddy registers with Let's Encrypt |
+| `WEB_CONCURRENCY` | `1` | uvicorn worker processes serving `app`; safe to raise — MCP is stateless and SQLite runs in WAL |
+| `WORKER_CONCURRENCY` | `1` | polling threads in the `worker` container; safe to raise — job claiming is atomic and the Caddyfile kinds are serialized |
 | `EMAIL_HOST` / `EMAIL_PORT` | `mail` / `1025` | SMTP (the mailcatcher service in dev) |
 | `EMAIL_FROM` | `cervo@localhost` | From address on outgoing mail |
 | `EMAIL_USER` / `EMAIL_PASSWORD` | *(empty)* | set for a real SMTP provider — switches `mail.send` to STARTTLS + login (port 587 shape) |
@@ -61,14 +69,22 @@ Auth has no knobs: token and code lifetimes are private constants in
 - `src/cervo/user/`, `src/cervo/website/`, `src/cervo/auth/`, `src/cervo/job/` —
   one package per domain (see below)
 - `src/cervo/schema.py` — `create_tables()`, the one place that knows every table
-- `src/cervo/db.py` — `connect()`, the connection context manager
+- `src/cervo/db.py` — `connect()`, the connection context manager (WAL, busy
+  timeout, `IMMEDIATE` transactions — what lets several processes share the
+  file), and `transact()`, the only way async code runs one: the whole
+  transaction goes to a worker thread, so the event loop never blocks on
+  SQLite (or on the SMTP send inside `auth.send_code`). Sync `def` tools
+  need no wrapper — FastMCP already runs those in its threadpool
 - `src/cervo/errors.py` — `AppError`, the base for failures the user should read
 - `src/cervo/mail.py` — sending mail over SMTP (the sign-in codes)
 - `src/cervo/caddy.py` — rendering the Caddyfile from the database and reloading
   caddy over its admin API
 - `src/cervo/templates/` — jinja2 templates: the Caddyfile and the MCP app
   pages (deployment progress, websites overview)
-- `src/cervo/__init__.py` — `main()` entrypoint (the `app` service)
+- `src/cervo/__init__.py` — `main()` entrypoint (the `app` service): creates
+  the tables, then hands uvicorn the `cervo.asgi:application` import string
+- `src/cervo/asgi.py` — the ASGI app uvicorn's workers import; built with
+  `stateless_http=True`, the setting that makes multiple workers safe
 - `Dockerfile` — one image for `app`, `worker`, and the test runner
   (`ENTRYPOINT ["uv", "run"]`)
 - `docker-compose.yml` — the dev environment (see Running);
@@ -113,7 +129,10 @@ so one person can own many.
 
 `job` is generic on purpose: a row is a `kind` plus a JSON `payload`, so future
 background work reuses the same queue, retry, and timeout machinery. Timestamps
-and payload serialization never leave its `_dao`.
+and payload serialization never leave its `_dao`. A kind can be declared
+one-at-a-time with `job.serialize(kind)` — enforced in the claim statement
+itself, so it holds across any number of worker processes; the domain owning
+the kind declares it at import time.
 
 ## Authentication
 
@@ -149,7 +168,10 @@ and writes the default `index.html` (only if missing — an owner's replaced
 files are never clobbered), `website.configure` regenerates the whole Caddyfile
 from the database, and `website.activate` POSTs it to caddy's `/load` admin
 endpoint. Every step is idempotent, so retrying is always safe — and only the
-failed step retries, not the whole chain.
+failed step retries, not the whole chain. The steps that rewrite or reload
+the shared Caddyfile (`website.configure`, `website.activate`,
+`website.delete`) are serialized — at most one of each kind runs at a time,
+however many workers there are — while other kinds keep flowing around them.
 
 Because the deployment is now stepwise, a site also reports `step`,
 `steps_done`, and `steps_total`, and `create_website` streams real-time

@@ -13,6 +13,7 @@ from cervo.job.service import (
     latest,
     latest_of,
     reap,
+    serialize,
     succeed,
 )
 from cervo.job.types import Job, JobStatus, PermanentError
@@ -29,5 +30,6 @@ __all__ = [
     "latest",
     "latest_of",
     "reap",
+    "serialize",
     "succeed",
 ]

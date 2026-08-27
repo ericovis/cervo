@@ -25,16 +25,31 @@ _log = logging.getLogger(__name__)
 
 
 def main() -> None:
-    """Start the worker. The compose service boots it before the server."""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    """Start the worker. The compose service boots it before the server.
+
+    One process, ``WORKER_CONCURRENCY`` polling threads — more workers
+    without another container. Claiming (and the one-at-a-time rule for
+    serialized kinds) is a single statement in the database, so threads,
+    processes, and containers can mix freely without double-running a job.
+    The threads are daemons on purpose: there is no shutdown protocol, and
+    a killed process is recovered by the reaper, thread count included.
+    """
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(threadName)s %(message)s"
+    )
     create_tables()
+    _heal()  # once, before any thread polls — never concurrently
+    threading.current_thread().name = "worker-1"
+    for n in range(config.WORKER_CONCURRENCY - 1):
+        threading.Thread(
+            target=run_forever, name=f"worker-{n + 2}", daemon=True
+        ).start()
     run_forever()
 
 
 def run_forever(stop: threading.Event | None = None) -> None:
     """Poll for due jobs until told to stop (in practice: until killed)."""
     stop = stop or threading.Event()
-    _heal()
     while not stop.wait(_POLL_INTERVAL):
         with connect() as conn:
             reaped = job.reap(conn)

@@ -11,7 +11,7 @@ yet?", "timed out?" — stays in SQL. The payload is stored as canonical JSON
 
 import json
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -43,7 +43,10 @@ RETURNING *
 """
 
 # A single statement, so a job can never be claimed twice; the deadline is
-# stamped from the job's own timeout as it starts running.
+# stamped from the job's own timeout as it starts running. Kinds named in
+# :serialized (a JSON array) are claimable only while no job of the same
+# kind is running — one statement is also what makes "one at a time" hold
+# across any number of workers.
 _CLAIM_DUE = """
 UPDATE job
 SET status = 'running', times_out_at = :now + timeout
@@ -51,6 +54,13 @@ WHERE id = (
     SELECT id FROM job
     WHERE status = 'pending'
       AND (next_attempt_at IS NULL OR next_attempt_at <= :now)
+      AND (
+        kind NOT IN (SELECT value FROM json_each(:serialized))
+        OR NOT EXISTS (
+            SELECT 1 FROM job AS other
+            WHERE other.status = 'running' AND other.kind = job.kind
+        )
+      )
     ORDER BY id
     LIMIT 1
 )
@@ -152,9 +162,15 @@ def insert(
     return _from_row(row)
 
 
-def claim_due(conn: sqlite3.Connection) -> Job | None:
-    """Take the oldest due pending job and mark it running, atomically."""
-    row = conn.execute(_CLAIM_DUE, {"now": _now()}).fetchone()
+def claim_due(conn: sqlite3.Connection, serialized: Collection[str] = ()) -> Job | None:
+    """Take the oldest due pending job and mark it running, atomically.
+
+    A due job whose kind is in ``serialized`` is skipped while another job
+    of the same kind is running; every other kind keeps flowing around it.
+    """
+    row = conn.execute(
+        _CLAIM_DUE, {"now": _now(), "serialized": json.dumps(sorted(serialized))}
+    ).fetchone()
     return _from_row(row) if row else None
 
 

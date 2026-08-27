@@ -142,3 +142,38 @@ def test_latest_matches_the_exact_kind_and_payload():
 
     assert found.id == new.id > old.id
     assert missing is None
+
+
+def test_a_serialized_kind_waits_while_one_of_it_runs():
+    job.serialize("tests.solo")
+    with connect() as conn:
+        first = job.enqueue(conn, "tests.solo", {"n": 1})
+        job.enqueue(conn, "tests.solo", {"n": 2})
+        job.enqueue(conn, "tests.bystander", {})
+
+    with connect() as conn:
+        running = job.claim_due(conn)
+    assert running is not None and running.id == first.id
+
+    # The second solo job is due but not claimable; other kinds keep flowing.
+    with connect() as conn:
+        claimed = job.claim_due(conn)
+    assert claimed is not None and claimed.kind == "tests.bystander"
+    with connect() as conn:
+        assert job.claim_due(conn) is None
+
+
+def test_a_serialized_kind_flows_again_once_the_runner_settles():
+    job.serialize("tests.turn-taker")
+    with connect() as conn:
+        job.enqueue(conn, "tests.turn-taker", {"n": 1})
+        job.enqueue(conn, "tests.turn-taker", {"n": 2})
+
+    with connect() as conn:
+        running = job.claim_due(conn)
+        assert running is not None
+        job.succeed(conn, running.id)
+
+    with connect() as conn:
+        claimed = job.claim_due(conn)
+    assert claimed is not None and claimed.payload == {"n": 2}

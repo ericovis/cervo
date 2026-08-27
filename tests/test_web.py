@@ -11,7 +11,7 @@ PAGES = ["/", "/docs", "/terms", "/privacy"]
 
 @pytest.fixture
 def client():
-    with TestClient(app.http_app()) as client:
+    with TestClient(app.http_app(stateless_http=True)) as client:
         yield client
 
 

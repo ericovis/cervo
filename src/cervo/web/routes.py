@@ -18,7 +18,7 @@ def register(app: FastMCP) -> None:
 
     @app.custom_route("/", methods=["GET"])
     async def home_route(request: Request) -> Response:
-        return home.home_page()
+        return await home.home_page()
 
     @app.custom_route("/docs", methods=["GET"])
     async def docs_route(request: Request) -> Response:
@@ -36,7 +36,7 @@ def register(app: FastMCP) -> None:
     # ahead of these routes) redirects here to have the email verified.
     @app.custom_route("/verify", methods=["GET"])
     async def verify_route(request: Request) -> Response:
-        return verify.verify_page(request)
+        return await verify.verify_page(request)
 
     @app.custom_route("/verify/email", methods=["POST"])
     async def verify_email_route(request: Request) -> Response:

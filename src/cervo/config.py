@@ -25,6 +25,12 @@ DOMAIN = config("DOMAIN", default="localhost")
 SCHEME = config("SCHEME", default="http")  # "https" in production; caddy
 # then obtains a certificate per hostname and redirects plain http.
 ACME_EMAIL = config("ACME_EMAIL", default="")  # contact for certificate issues
+WEB_CONCURRENCY = config("WEB_CONCURRENCY", default=1, cast=int)  # uvicorn
+# worker processes serving the app; safe to raise, because MCP runs
+# stateless and SQLite runs in WAL — no request state lives in a process.
+WORKER_CONCURRENCY = config("WORKER_CONCURRENCY", default=1, cast=int)  # the
+# worker service's polling threads, all in its one container; job claiming
+# is atomic in the database, so more never double-runs a job.
 
 
 def origin(host: str | None = None) -> str:
