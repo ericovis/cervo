@@ -19,6 +19,18 @@ from cervo.web import layout
 
 _EMAIL = TypeAdapter(EmailStr)
 
+
+def _no_store(response: Response) -> Response:
+    """Forbid caching: the flow advances by re-rendering the same URL.
+
+    Without this, a browser may satisfy the redirect after "Send the code"
+    from its heuristic cache and show the email form again — the page looks
+    stuck on the first step.
+    """
+    response.headers["cache-control"] = "no-store"
+    return response
+
+
 _FORM_CSS = """
 .verify { display: flex; flex-direction: column; gap: 14px; max-width: 420px; }
 .verify label { font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted, inherit); }
@@ -35,10 +47,10 @@ def verify_page(request: Request) -> Response:
     with connect() as conn:
         txn = auth.transaction(conn, txn_id)
     if txn is None:
-        return _gone_page()
+        return _no_store(_gone_page())
     if txn.email is None or "change" in request.query_params:
-        return _email_page(txn.txn_id, email=txn.email)
-    return _code_page(txn.txn_id, txn.email)
+        return _no_store(_email_page(txn.txn_id, email=txn.email))
+    return _no_store(_code_page(txn.txn_id, txn.email))
 
 
 async def submit_email(request: Request) -> Response:
@@ -50,16 +62,20 @@ async def submit_email(request: Request) -> Response:
     try:
         address = _EMAIL.validate_python(address)
     except ValidationError:
-        return _email_page(
-            txn_id, email=address, error="That does not look like an email address."
+        return _no_store(
+            _email_page(
+                txn_id,
+                email=address,
+                error="That does not look like an email address.",
+            )
         )
 
     try:
         with connect() as conn:
             auth.send_code(conn, txn_id, address)
     except auth.AuthError:
-        return _gone_page()
-    return RedirectResponse(f"/verify?txn={txn_id}", status_code=303)
+        return _no_store(_gone_page())
+    return _no_store(RedirectResponse(f"/verify?txn={txn_id}", status_code=303))
 
 
 async def submit_code(request: Request) -> Response:
@@ -71,7 +87,7 @@ async def submit_code(request: Request) -> Response:
     with connect() as conn:
         txn = auth.transaction(conn, txn_id)
     if txn is None or txn.email is None:
-        return _gone_page()
+        return _no_store(_gone_page())
 
     # The connection closes before the error is rendered, so a refusal still
     # commits the attempt it recorded on the way (see cervo.errors.AppError).
@@ -80,9 +96,9 @@ async def submit_code(request: Request) -> Response:
             callback = auth.confirm(conn, txn_id, code)
     except auth.AuthError as error:
         if "attempts left" in str(error):
-            return _code_page(txn_id, txn.email, error=str(error))
-        return _gone_page(str(error))
-    return RedirectResponse(callback, status_code=302)
+            return _no_store(_code_page(txn_id, txn.email, error=str(error)))
+        return _no_store(_gone_page(str(error)))
+    return _no_store(RedirectResponse(callback, status_code=302))
 
 
 def _email_page(

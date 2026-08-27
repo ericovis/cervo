@@ -25,7 +25,7 @@ from mcp.server.auth.provider import (
 from mcp.shared.auth import OAuthToken
 from pydantic import AnyUrl
 
-from cervo import mail, user
+from cervo import config, mail, user
 from cervo.auth import _dao
 from cervo.auth.types import Transaction
 from cervo.errors import AppError
@@ -47,9 +47,13 @@ Someone is connecting cervo with this email address.
 
 Your verification code is: {code}
 
-Type it into the sign-in page to finish connecting. The code expires in
-{minutes} minutes. If this wasn't you, ignore this email — nothing has been
-created and nobody has access to your sites.
+Type it into the sign-in page to finish connecting — if you closed that
+page, it is at:
+
+    {link}
+
+The code expires in {minutes} minutes. If this wasn't you, ignore this
+email — nothing has been created and nobody has access to your sites.
 """
 
 
@@ -123,10 +127,16 @@ def send_code(conn: sqlite3.Connection, txn_id: str, email: str) -> Transaction:
 
     code = "".join(secrets.choice("0123456789") for _ in range(_CODE_DIGITS))
     # Mail first: a send failure must not leave a challenge nobody can answer.
+    # The link is a way back to the code form; it only helps whoever already
+    # holds this email, where the code itself sits right above it.
     mail.send(
         to=email,
         subject=_SUBJECT,
-        body=_BODY.format(code=code, minutes=_TXN_TTL // 60),
+        body=_BODY.format(
+            code=code,
+            link=f"{config.origin()}/verify?txn={txn.txn_id}",
+            minutes=_TXN_TTL // 60,
+        ),
     )
     _dao.set_txn_challenge(conn, txn_id, email, _hash(code))
     return _dao.get_txn(conn, txn_id)

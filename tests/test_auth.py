@@ -44,6 +44,35 @@ async def test_the_emailed_code_is_never_stored_in_the_clear(data_dir, mailbox):
     assert code not in database
 
 
+async def test_submitting_the_email_advances_to_the_code_form(mailbox):
+    """The same URL serves each step, so caching it would freeze the flow."""
+    async with serving() as web:
+        flow = Flow(web)
+        await flow.authorize()
+
+        page = await web.get(f"/verify?txn={flow.txn}")
+        assert 'name="email"' in page.text
+        assert page.headers["cache-control"] == "no-store"
+
+        response = await flow.submit_email(OWNER)
+        assert response.status_code == 303
+        assert response.headers["cache-control"] == "no-store"
+
+        page = await web.get(response.headers["location"])
+        assert 'name="code"' in page.text, "the code form did not appear"
+        assert page.headers["cache-control"] == "no-store"
+
+
+async def test_the_email_links_back_to_the_sign_in_page(mailbox):
+    """Closing the tab must not strand the user — the mail holds the way back."""
+    async with serving() as web:
+        flow = Flow(web)
+        await flow.authorize()
+        await flow.submit_email(OWNER)
+
+    assert f"http://localhost/verify?txn={flow.txn}" in mailbox.last.body
+
+
 async def test_a_wrong_code_counts_down_the_attempts(mailbox):
     async with serving() as web:
         flow = Flow(web)
