@@ -14,10 +14,10 @@ async def test_list_websites_declares_the_overview_ui():
     assert tools["list_websites"].meta["ui"] == {"resourceUri": WEBSITES_URI}
 
 
-async def test_the_result_is_one_text_block_the_page_can_parse(mailbox):
+async def test_the_result_is_one_text_block_the_page_can_parse():
     """The UI reads the first text content block as the whole JSON list."""
     async with chat() as c:
-        await sign_in(c, mailbox)
+        await sign_in(c)
         await call(c, "create_website", slug="one")
         deploy()
         await call(c, "create_website", slug="two")

@@ -1,6 +1,6 @@
 # Cervo
 
-A demo app for managing static website hosting on a shared VPS, built as an MCP server with [FastMCP](https://gofastmcp.com). Claude Code is the AI/chat interface used to exercise and test the server's tools during development. The whole environment — dev and production alike — runs from docker-compose: caddy is the front door, a worker process runs deployments, and mailcatcher stands in for SMTP in development.
+A demo app for managing static website hosting on a shared VPS, built as an MCP server with [FastMCP](https://gofastmcp.com). Claude Code is the AI/chat interface used to exercise and test the server's tools during development. The whole environment — dev and production alike — runs from docker-compose: caddy is the front door and a worker process runs deployments.
 
 ## Running
 
@@ -10,12 +10,11 @@ Prerequisite: [Docker](https://www.docker.com/) (with Compose). [uv](https://doc
 bin/dev    # docker compose up -d — the whole environment
 ```
 
-The stack is four services, all sharing the `.data` volume at `/mnt/data`:
+The stack is three services, all sharing the `.data` volume at `/mnt/data`:
 
 - `app` — the MCP server and the public website, one process. Publishes no port; caddy reverse-proxies it at `http://localhost` — the homepage (with docs at `/docs`) — and the MCP endpoint stays `http://localhost/mcp`.
 - `worker` — the job worker (`cervo-worker`). Boots first, creates the database tables, and renders the initial Caddyfile.
 - `caddy` — the front door on ports 80/443. Runs on the generated `/mnt/data/Caddyfile` and serves the sites at `http://{slug}.localhost`. Its unauthenticated admin API (`caddy:2019`) is reachable only on the compose network. On a fresh checkout it restarts until the worker first renders the Caddyfile — that's the `restart: unless-stopped` doing its job, not a bug.
-- `mail` — mailcatcher (SMTP on 1025, web UI at http://localhost:1080). Development mail goes here, not to real SMTP.
 
 `./src` (and `./tests`) are bind-mounted into `app` and `worker`, so after changing code run `docker compose restart app` (or `worker`) — no rebuild needed. Rebuild (`docker compose build`) only when dependencies change.
 
@@ -35,17 +34,15 @@ What actually varies between environments is read from the environment / `.env` 
 | `DOMAIN` | `localhost` | cervo is served at `{SCHEME}://{DOMAIN}`, sites at `{SCHEME}://{slug}.{DOMAIN}` |
 | `SCHEME` | `http` | `https` in production: caddy then gets a certificate per hostname (persisted in its `/data` volume) and redirects plain http |
 | `ACME_EMAIL` | *(empty)* | contact caddy registers with Let's Encrypt |
-| `EMAIL_HOST` / `EMAIL_PORT` | `mail` / `1025` | SMTP (the mailcatcher service in dev) |
-| `EMAIL_FROM` | `cervo@localhost` | From address on outgoing mail |
-| `EMAIL_USER` / `EMAIL_PASSWORD` | *(empty)* | set for a real SMTP provider — switches `mail.send` to STARTTLS + login (port 587 shape) |
-| `AUTH_CODE_TTL` | `600` | seconds an emailed sign-in code stays valid |
 | `AUTH_SESSION_TTL` | `14400` | seconds a chat stays signed in (4 hours) |
 
 ## Layout
 
 - `src/cervo/server.py` — the FastMCP instance (`app`) and all tool definitions.
-  `authenticate` uses MCP elicitation to have the human confirm the address before
-  any code is sent, so a client that cannot elicit cannot sign in.
+  `authenticate` is Claude-only (the client must introduce itself as Claude in
+  the MCP handshake) and takes the email on the user's Claude account: MCP
+  elicitation has the human confirm the address, and confirming it is the whole
+  sign-in — no code is emailed, so a client that cannot elicit cannot sign in.
 - `src/cervo/web/` — the public website: pages built from FastHTML fasttags on
   the design system (`design-system/`), registered on the FastMCP app as custom
   HTTP routes (`web.register(app)` at the bottom of server.py). FastMCP appends
@@ -61,7 +58,6 @@ What actually varies between environments is read from the environment / `.env` 
 - `src/cervo/schema.py` — `create_tables()`, the one place that knows every table
 - `src/cervo/db.py` — `connect()`, the connection context manager
 - `src/cervo/errors.py` — `AppError`, the base for failures the user should read
-- `src/cervo/mail.py` — sending mail over SMTP
 - `src/cervo/caddy.py` — rendering the Caddyfile from the database and reloading
   caddy over its admin API
 - `src/cervo/templates/` — jinja2 templates: the Caddyfile and the MCP app
@@ -176,10 +172,10 @@ collide.
 `tests/smoke.py` holds the end-to-end checks, run by their own `smoke`
 service — `depends_on` pulls up the stack they exercise. From inside the test
 network they cover the whole surface through real clients: every tool listed,
-sign-in with the code verified in mailcatcher (sender, subject, wrong code
-refused, declining sends nothing), sessions not leaking across conversations,
-slug validation and ownership rules, and a site created, polled to `live`,
-and its page actually fetched through caddy. The file is intentionally named
+sign-in by confirming the Claude account's email (non-Claude clients refused,
+declining leaves the chat signed out), sessions not leaking across
+conversations, slug validation and ownership rules, and a site created,
+polled to `live`, and its page actually fetched through caddy. The file is intentionally named
 so a plain `pytest` run skips it (it needs the stack up); in the test stack
 `DOMAIN` is set to `caddy`, so the front door is `http://caddy` and sites are
 fetched with a Host header.
@@ -191,18 +187,18 @@ every pull request.
 
 Tests never touch development data or services: autouse fixtures in
 `tests/conftest.py` repoint `config.DATA_DIR` and `config.DATABASE_PATH` at a
-per-test `tmp_path` (creating the tables there), replace `mail.send` with a
-capture list, and replace `caddy.reload` the same way. All three are autouse — a
-test cannot escape them by forgetting a fixture — and `tests/test_isolation.py`
-asserts the guarantees hold.
+per-test `tmp_path` (creating the tables there) and replace `caddy.reload`
+with a capture list. Both are autouse — a test cannot escape them by
+forgetting a fixture — and `tests/test_isolation.py` asserts the guarantees
+hold.
 
 Write tests against the MCP tools rather than the services: `chat()` returns a
 client whose connection is one conversation (its own session id, so its own
-sign-in) with a scripted human answering the elicitation, and `sign_in()` runs the
-whole handshake. The website's pages are tested through a starlette `TestClient`
-over `app.http_app()` (`tests/test_web.py`). Read codes out of the `mailbox` fixture the way a user reads their
-inbox. The worker never runs as a process in tests — call `worker.run_once()` (or
-the `deploy()` helper) for deterministic deployments.
+sign-in) that introduces itself as Claude, with a scripted human answering the
+elicitation, and `sign_in()` authenticates it. The website's pages are tested
+through a starlette `TestClient` over `app.http_app()` (`tests/test_web.py`).
+The worker never runs as a process in tests — call `worker.run_once()` (or the
+`deploy()` helper) for deterministic deployments.
 
 Note `tests/__init__.py` is required: a transitive dependency (`caio`) installs a
 top-level `tests` package that otherwise shadows this one.

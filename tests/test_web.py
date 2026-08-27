@@ -36,9 +36,9 @@ def test_the_catalog_starts_empty(client):
     assert "No sites are live yet" in client.get("/").text
 
 
-async def test_the_catalog_lists_only_live_sites(client, mailbox):
+async def test_the_catalog_lists_only_live_sites(client):
     async with chat() as c:
-        await sign_in(c, mailbox)
+        await sign_in(c)
         await call(c, "create_website", slug="ready")
         deploy()
         await call(c, "create_website", slug="waiting")

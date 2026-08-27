@@ -1,21 +1,23 @@
-"""Fixtures that keep tests off the development data, SMTP, and caddy.
+"""Fixtures that keep tests off the development data and caddy.
 
-All three guards are autouse, so a test cannot reach real data, a real mail
-server, or caddy's admin API even by forgetting to ask for a fixture.
+Both guards are autouse, so a test cannot reach real data or caddy's admin
+API even by forgetting to ask for a fixture.
 """
-
-import re
-from dataclasses import dataclass
 
 import pytest
 from fastmcp import Client
 from fastmcp.client.elicitation import ElicitResult
+from mcp.types import Implementation
 
-from cervo import caddy, config, mail, server, worker
+from cervo import caddy, config, server, worker
 from cervo.schema import create_tables
 from cervo.server import app
 
 OWNER = "owner@example.com"
+
+# What a real Claude client sends in the initialize handshake; the server
+# only signs in clients whose name says Claude.
+CLAUDE = Implementation(name="claude-code", version="0.0.0-test")
 
 
 @pytest.fixture(autouse=True)
@@ -42,45 +44,6 @@ def domain(monkeypatch):
     """
     monkeypatch.setattr(config, "DOMAIN", "localhost")
     monkeypatch.setattr(config, "SCHEME", "http")
-
-
-@dataclass
-class Message:
-    to: str
-    subject: str
-    body: str
-
-    @property
-    def code(self) -> str:
-        """The six-digit code in the body, so tests read mail like a user."""
-        match = re.search(r"code is: (\d{6})", self.body)
-        assert match, f"no code in email body:\n{self.body}"
-        return match.group(1)
-
-
-class Mailbox(list):
-    """Everything the app tried to send during a test."""
-
-    @property
-    def last(self) -> Message:
-        assert self, "no email was sent"
-        return self[-1]
-
-    @property
-    def last_code(self) -> str:
-        return self.last.code
-
-
-@pytest.fixture(autouse=True)
-def mailbox(monkeypatch) -> Mailbox:
-    """Capture outgoing mail instead of talking to mailcatcher."""
-    sent = Mailbox()
-
-    def fake_send(to: str, subject: str, body: str) -> None:
-        sent.append(Message(to=to, subject=subject, body=body))
-
-    monkeypatch.setattr(mail, "send", fake_send)
-    return sent
 
 
 @pytest.fixture(autouse=True)
@@ -122,13 +85,19 @@ def deploy() -> int:
     return ran
 
 
-def chat(confirms: str | None = None, *, action: str = "accept") -> Client:
+def chat(
+    confirms: str | None = None,
+    *,
+    action: str = "accept",
+    client_info: Implementation = CLAUDE,
+) -> Client:
     """A client whose connection is one conversation, with a scripted human.
 
     By default the human accepts whatever address the tool proposed, which is
     the ordinary case. Pass ``confirms`` to have them type a different one, so
     a test can model correcting the agent's guess, and ``action`` to have them
-    dismiss the form.
+    dismiss the form. The client introduces itself as Claude unless a test
+    passes another ``client_info`` to model a stranger.
     """
 
     async def handler(message, response_type, params, context):
@@ -137,7 +106,7 @@ def chat(confirms: str | None = None, *, action: str = "accept") -> Client:
         proposed = params.requestedSchema["properties"]["email"]["default"]
         return response_type(email=confirms or proposed)
 
-    return Client(app, elicitation_handler=handler)
+    return Client(app, elicitation_handler=handler, client_info=client_info)
 
 
 async def call(client: Client, tool: str, **arguments) -> str:
@@ -146,7 +115,6 @@ async def call(client: Client, tool: str, **arguments) -> str:
     return result.content[0].text
 
 
-async def sign_in(client: Client, mailbox: Mailbox, email: str = OWNER) -> str:
-    """Run the whole sign-in handshake the way an agent would."""
-    await call(client, "authenticate", email=email)
-    return await call(client, "confirm_authentication", code=mailbox.last_code)
+async def sign_in(client: Client, email: str = OWNER) -> str:
+    """Sign the conversation in the way an agent would."""
+    return await call(client, "authenticate", email=email)

@@ -52,14 +52,14 @@ def test_sites_are_not_visible_to_other_users():
         assert website.for_user(conn, bob) == []
 
 
-async def test_signing_in_twice_does_not_duplicate_the_user(mailbox):
+async def test_signing_in_twice_does_not_duplicate_the_user():
     """Two conversations, one person, one row in the user table."""
     async with chat() as first:
-        await sign_in(first, mailbox)
+        await sign_in(first)
         await first.call_tool("list_websites")
 
     async with chat() as second:
-        await sign_in(second, mailbox)
+        await sign_in(second)
         await second.call_tool("list_websites")
 
     with connect() as conn:

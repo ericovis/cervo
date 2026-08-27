@@ -23,7 +23,6 @@ services:
     depends_on:
       - worker
       - caddy
-      - mail
   worker:
     build: .
     command: cervo-worker
@@ -38,8 +37,6 @@ services:
     restart: unless-stopped
     volumes:
       - data:/mnt/data
-  mail:
-    image: schickling/mailcatcher:latest
 
 volumes:
   data:

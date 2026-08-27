@@ -8,7 +8,6 @@ services:
     depends_on:
       - worker
       - caddy
-      - mail
   worker:
     build: .
     command: cervo-worker
@@ -25,8 +24,3 @@ services:
       - 443:443
     volumes:
       - .data:/mnt/data
-  mail:
-    image: schickling/mailcatcher:latest
-    ports:
-      - 1080:1080
-      - 1025:1025

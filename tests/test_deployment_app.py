@@ -24,9 +24,9 @@ async def test_website_status_is_only_for_the_app():
     assert tools["website_status"].meta["ui"] == {"visibility": ["app"]}
 
 
-async def test_the_app_can_follow_a_deployment(mailbox):
+async def test_the_app_can_follow_a_deployment():
     async with chat() as c:
-        await sign_in(c, mailbox)
+        await sign_in(c)
         await call(c, "create_website", slug="watched")
 
     # The app polls from the same conversation, but the tool itself does not

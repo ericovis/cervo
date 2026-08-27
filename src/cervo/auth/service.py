@@ -1,35 +1,21 @@
-"""Email confirmation as the one way to prove who you are.
+"""Confirming the Claude account's email as the one way to say who you are.
 
-A chat asks to authenticate, gets a code mailed to the address, and pastes it
-back; from then on the chat carries an :class:`~cervo.auth.AuthSession` that
-stands in for the email until it expires. Sessions are keyed by MCP session id,
-so a new conversation starts unauthenticated even for the same person.
+Cervo only talks to Claude, and Claude already knows the user's email — so
+signing in is the human confirming that address in the chat, no code mailed
+anywhere. From then on the chat carries an :class:`~cervo.auth.AuthSession`
+that stands in for the email until it expires. Sessions are keyed by MCP
+session id, so a new conversation starts unauthenticated even for the same
+person.
 """
 
-import hashlib
 import math
-import secrets
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
-from cervo import config, mail
+from cervo import config
 from cervo.auth import _dao
-from cervo.auth.types import AuthChallenge, AuthSession
+from cervo.auth.types import AuthSession
 from cervo.errors import AppError
-
-_CODE_DIGITS = 6
-_MAX_ATTEMPTS = 5
-
-_SUBJECT = "Your cervo confirmation code"
-_BODY = """\
-Someone is signing in to cervo with this email address.
-
-Your confirmation code is: {code}
-
-Paste it back in the conversation to finish signing in. The code expires in
-{minutes} minutes. If this wasn't you, ignore this email — nothing has been
-created and nobody has access to your sites.
-"""
 
 
 class AuthError(AppError):
@@ -38,10 +24,6 @@ class AuthError(AppError):
 
 class NotAuthenticated(AuthError):
     """Raised when an action needs an email that this chat has not confirmed."""
-
-
-def _hash(code: str) -> str:
-    return hashlib.sha256(code.encode()).hexdigest()
 
 
 def minutes_until(moment: datetime) -> int:
@@ -55,52 +37,17 @@ def create_tables(conn: sqlite3.Connection) -> None:
     _dao.create_tables(conn)
 
 
-def start(conn: sqlite3.Connection, session_id: str, email: str) -> AuthChallenge:
-    """Mail a fresh code to ``email`` and park the challenge for this chat.
+def sign_in(conn: sqlite3.Connection, session_id: str, email: str) -> AuthSession:
+    """Authenticate this chat as ``email``, replacing any earlier session.
 
-    Asking again simply reissues the code, which invalidates the previous one.
+    The caller has already had the human confirm the address; signing in
+    again simply refreshes the session's expiry.
     """
-    code = "".join(secrets.choice("0123456789") for _ in range(_CODE_DIGITS))
-    challenge = AuthChallenge(
-        session_id=session_id,
-        email=email,
-        code_hash=_hash(code),
-        expires_at=datetime.now(UTC) + timedelta(seconds=config.AUTH_CODE_TTL),
-    )
-
-    # Mail first: a send failure must not leave a challenge nobody can answer.
-    mail.send(
-        to=challenge.email,
-        subject=_SUBJECT,
-        body=_BODY.format(code=code, minutes=config.AUTH_CODE_TTL // 60),
-    )
-    return _dao.upsert_challenge(conn, challenge)
-
-
-def confirm(conn: sqlite3.Connection, session_id: str, code: str) -> AuthSession:
-    """Check the code and authenticate this chat. Raises on any mismatch."""
-    challenge = _dao.get_challenge(conn, session_id)
-    if challenge is None:
-        raise AuthError("Nothing to confirm in this chat. Start with authenticate.")
-    if challenge.is_expired():
-        _dao.delete_challenge(conn, session_id)
-        raise AuthError("That code has expired. Start with authenticate again.")
-
-    if not secrets.compare_digest(challenge.code_hash, _hash(code.strip())):
-        attempts = _dao.record_attempt(conn, session_id)
-        if attempts >= _MAX_ATTEMPTS:
-            _dao.delete_challenge(conn, session_id)
-            raise AuthError("Too many wrong codes. Start with authenticate again.")
-        raise AuthError(
-            f"That code is not right. {_MAX_ATTEMPTS - attempts} attempts left."
-        )
-
-    _dao.delete_challenge(conn, session_id)
     return _dao.upsert_session(
         conn,
         AuthSession(
             session_id=session_id,
-            email=challenge.email,
+            email=email,
             expires_at=datetime.now(UTC) + timedelta(seconds=config.AUTH_SESSION_TTL),
         ),
     )
@@ -122,8 +69,8 @@ def require(conn: sqlite3.Connection, session_id: str) -> AuthSession:
     session = current(conn, session_id)
     if session is None:
         raise NotAuthenticated(
-            "This chat is not authenticated, or its session has expired. Ask "
-            "the user which email owns the site and call authenticate with it, "
-            "then confirm_authentication with the code they receive."
+            "This chat is not authenticated, or its session has expired. Call "
+            "authenticate with the email address on the user's Claude account "
+            "and have them confirm it, then retry."
         )
     return session

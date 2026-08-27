@@ -26,9 +26,9 @@ async def test_nothing_is_written_when_the_chat_is_not_signed_in():
         assert not website.exists(conn, "mine")
 
 
-async def test_the_owner_comes_from_the_session(mailbox):
+async def test_the_owner_comes_from_the_session():
     async with chat() as c:
-        await sign_in(c, mailbox, "alice@example.com")
+        await sign_in(c, "alice@example.com")
         result = await c.call_tool("create_website", {"slug": "alices-site"})
 
     with connect() as conn:
@@ -48,21 +48,21 @@ async def test_the_owner_comes_from_the_session(mailbox):
     }
 
 
-async def test_recreating_your_own_site_mid_deployment_is_refused(mailbox):
+async def test_recreating_your_own_site_mid_deployment_is_refused():
     async with chat() as c:
-        await sign_in(c, mailbox)
+        await sign_in(c)
         await call(c, "create_website", slug="taken")
         with pytest.raises(ToolError, match="in progress"):
             await call(c, "create_website", slug="taken")
 
 
-async def test_someone_else_cannot_take_a_slug_that_exists(mailbox):
+async def test_someone_else_cannot_take_a_slug_that_exists():
     async with chat() as alice:
-        await sign_in(alice, mailbox, "alice@example.com")
+        await sign_in(alice, "alice@example.com")
         await call(alice, "create_website", slug="contested")
 
     async with chat() as bob:
-        await sign_in(bob, mailbox, "bob@example.com")
+        await sign_in(bob, "bob@example.com")
         with pytest.raises(ToolError, match="already taken"):
             await call(bob, "create_website", slug="contested")
 
@@ -77,17 +77,17 @@ async def test_someone_else_cannot_take_a_slug_that_exists(mailbox):
 @pytest.mark.parametrize(
     "slug", ["Upper", "under_score", "-leading", "trailing-", "has space", ""]
 )
-async def test_a_slug_that_is_not_dns_safe_is_rejected(slug, mailbox):
+async def test_a_slug_that_is_not_dns_safe_is_rejected(slug):
     async with chat() as c:
-        await sign_in(c, mailbox)
+        await sign_in(c)
         with pytest.raises(ToolError):
             await call(c, "create_website", slug=slug)
 
 
 @pytest.mark.parametrize("slug", ["a", "site", "my-site", "a1-b2-c3"])
-async def test_dns_safe_slugs_are_accepted(slug, mailbox):
+async def test_dns_safe_slugs_are_accepted(slug):
     async with chat() as c:
-        await sign_in(c, mailbox)
+        await sign_in(c)
         assert slug in await call(c, "create_website", slug=slug)
 
 
@@ -197,17 +197,17 @@ async def test_listing_needs_a_signed_in_chat():
             await call(c, "list_websites")
 
 
-async def test_listing_is_empty_before_anything_is_created(mailbox):
+async def test_listing_is_empty_before_anything_is_created():
     async with chat() as c:
-        await sign_in(c, mailbox)
+        await sign_in(c)
         result = await c.call_tool("list_websites")
 
     assert result.structured_content["result"] == []
 
 
-async def test_listing_returns_every_site_the_user_owns(mailbox):
+async def test_listing_returns_every_site_the_user_owns():
     async with chat() as c:
-        await sign_in(c, mailbox)
+        await sign_in(c)
         await call(c, "create_website", slug="alpha")
         await call(c, "create_website", slug="beta")
         result = await c.call_tool("list_websites")
@@ -218,13 +218,13 @@ async def test_listing_returns_every_site_the_user_owns(mailbox):
     ]
 
 
-async def test_listing_shows_only_your_own_sites(mailbox):
+async def test_listing_shows_only_your_own_sites():
     async with chat() as alice:
-        await sign_in(alice, mailbox, "alice@example.com")
+        await sign_in(alice, "alice@example.com")
         await call(alice, "create_website", slug="alices-place")
 
     async with chat() as bob:
-        await sign_in(bob, mailbox, "bob@example.com")
+        await sign_in(bob, "bob@example.com")
         await call(bob, "create_website", slug="bobs-place")
         result = await bob.call_tool("list_websites")
 
@@ -239,9 +239,9 @@ async def test_deleting_a_site_needs_a_signed_in_chat():
             await call(c, "delete_website", slug="mine")
 
 
-async def test_the_owner_deletes_their_own_site(mailbox):
+async def test_the_owner_deletes_their_own_site():
     async with chat() as c:
-        await sign_in(c, mailbox)
+        await sign_in(c)
         await call(c, "create_website", slug="doomed")
         assert "deleted" in await call(c, "delete_website", slug="doomed")
         result = await c.call_tool("list_websites")
@@ -251,13 +251,13 @@ async def test_the_owner_deletes_their_own_site(mailbox):
         assert not website.exists(conn, "doomed")
 
 
-async def test_a_site_cannot_be_deleted_by_someone_else(mailbox):
+async def test_a_site_cannot_be_deleted_by_someone_else():
     async with chat() as alice:
-        await sign_in(alice, mailbox, "alice@example.com")
+        await sign_in(alice, "alice@example.com")
         await call(alice, "create_website", slug="alices-only")
 
     async with chat() as bob:
-        await sign_in(bob, mailbox, "bob@example.com")
+        await sign_in(bob, "bob@example.com")
         with pytest.raises(ToolError, match="someone else"):
             await call(bob, "delete_website", slug="alices-only")
 
@@ -265,9 +265,9 @@ async def test_a_site_cannot_be_deleted_by_someone_else(mailbox):
         assert website.exists(conn, "alices-only")
 
 
-async def test_deleting_a_site_that_does_not_exist_is_refused(mailbox):
+async def test_deleting_a_site_that_does_not_exist_is_refused():
     async with chat() as c:
-        await sign_in(c, mailbox)
+        await sign_in(c)
         with pytest.raises(ToolError, match="no site"):
             await call(c, "delete_website", slug="ghost")
 

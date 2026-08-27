@@ -7,7 +7,7 @@ A demo app for managing static website hosting on a shared VPS. It's built as an
 Prerequisite: [Docker](https://www.docker.com/) (with Compose).
 
 ```bash
-bin/dev    # docker compose up -d: app, worker, caddy, mail
+bin/dev    # docker compose up -d: app, worker, caddy
 ```
 
 Caddy fronts everything on port 80: the MCP server at `http://localhost/mcp`, and each created site at `http://{slug}.localhost`.
@@ -25,16 +25,15 @@ builds the image for `linux/amd64`, pushes it to Docker Hub tagged with the
 git sha, and runs the ansible playbook in `deploy/`, which writes the
 quadlet units and environment, pulls the image, and restarts the services —
 restarting the worker re-renders the Caddyfile, so config changes always
-land. Secrets never live in the repo: the Docker Hub token and SMTP
-password are read from 1Password by the `op` CLI at deploy time.
+land. Secrets never live in the repo: the Docker Hub token is read from
+1Password by the `op` CLI at deploy time.
 
 One-time setup:
 
 1. DNS: an `A` record for the apex and a wildcard `A *` record, both to the
    server's IP — sites live at `https://{slug}.{domain}`.
-2. 1Password items (vault `cervo`): `docker-hub` with a `token` field, and
-   `smtp` with a `password` field (the `op://` paths are inventory vars, so
-   any layout works).
+2. A 1Password item (vault `cervo`): `docker-hub` with a `token` field
+   (the `op://` path is an inventory var, so any layout works).
 3. Create `deploy/inventory.yml` (gitignored — every deploy setting lives
    here, nothing is hardcoded):
 
@@ -51,11 +50,6 @@ One-time setup:
        op_dockerhub_token: op://cervo/docker-hub/token
        domain: example.com
        acme_email: you@example.com
-       email_host: smtp.example.com # port-587 STARTTLS provider
-       email_port: 587
-       email_user: your-smtp-user
-       email_from: cervo@example.com # a sender your provider verified
-       op_smtp_password: op://cervo/smtp/password
    ```
 4. On your machine: `ansible` and `op` installed, `op` signed in, docker
    logged out is fine — `bin/deploy` logs in itself.

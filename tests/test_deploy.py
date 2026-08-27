@@ -163,7 +163,7 @@ def test_healing_renders_and_reloads_without_jobs(data_dir, caddy_reloads):
     assert caddy_reloads == [True]
 
 
-async def test_a_followed_creation_streams_progress(mailbox, monkeypatch):
+async def test_a_followed_creation_streams_progress(monkeypatch):
     """A client that sends a progress token sees each step and gets 'live'."""
     monkeypatch.setattr(server, "_FOLLOW_POLL", 0.02)
     monkeypatch.setattr(server, "_FOLLOW_FOR", 30)
@@ -178,7 +178,7 @@ async def test_a_followed_creation_streams_progress(mailbox, monkeypatch):
             await asyncio.to_thread(worker.run_once)
 
     async with chat() as c:
-        await sign_in(c, mailbox)
+        await sign_in(c)
         pumping = asyncio.create_task(pump())
         try:
             result = await c.call_tool(
@@ -196,17 +196,17 @@ async def test_a_followed_creation_streams_progress(mailbox, monkeypatch):
     assert updates[-1][2] == "live at http://followed.localhost"
 
 
-async def test_a_creation_that_outlasts_the_follow_window_hands_off(mailbox):
+async def test_a_creation_that_outlasts_the_follow_window_hands_off():
     """The tool never waits past its window: the site comes back pending."""
     async with chat() as c:  # conftest pins the window to zero
-        await sign_in(c, mailbox)
+        await sign_in(c)
         result = await c.call_tool("create_website", {"slug": "unwatched"})
     assert result.structured_content["status"] == "pending"
 
 
-async def test_an_agent_watches_a_site_go_live(mailbox):
+async def test_an_agent_watches_a_site_go_live():
     async with chat() as c:
-        await sign_in(c, mailbox)
+        await sign_in(c)
         await call(c, "create_website", slug="watched")
 
         deploy()  # the worker service, doing its thing

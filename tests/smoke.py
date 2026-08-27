@@ -5,16 +5,15 @@ match ``test_*.py`` — because these need the test stack up and reach it by
 service name, so they only run from inside that network (``bin/smoke``).
 
 Everything goes through the front door, exactly like a real client: the MCP
-server at ``http://{DOMAIN}/mcp``, sign-in codes read from mailcatcher's API
-the way a user reads their inbox, and deployed sites fetched via caddy with a
-Host header (only service names resolve inside the network).
+server at ``http://{DOMAIN}/mcp``, reached by a client introducing itself as
+Claude, and deployed sites fetched via caddy with a Host header (only service
+names resolve inside the network).
 """
 
 import asyncio
 import contextlib
 import json
 import os
-import re
 import time
 import urllib.error
 import urllib.request
@@ -24,13 +23,16 @@ import pytest
 from fastmcp import Client
 from fastmcp.client.elicitation import ElicitResult
 from fastmcp.exceptions import ToolError
+from mcp.types import Implementation
 
 DOMAIN = os.environ.get("DOMAIN", "localhost")
-MAIL_API = "http://mail:1080"
+
+# What a real Claude client sends in the initialize handshake; the server
+# only signs in clients whose name says Claude.
+CLAUDE = Implementation(name="claude-code", version="0.0.0-smoke")
 
 TOOLS = {
     "authenticate",
-    "confirm_authentication",
     "authentication_status",
     "create_website",
     "list_websites",
@@ -71,7 +73,7 @@ def unique(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:8]}"
 
 
-def chat(*, action: str = "accept") -> Client:
+def chat(*, action: str = "accept", client_info: Implementation = CLAUDE) -> Client:
     """One conversation against the real server, with a scripted human."""
 
     async def handler(message, response_type, params, context):
@@ -80,31 +82,13 @@ def chat(*, action: str = "accept") -> Client:
         proposed = params.requestedSchema["properties"]["email"]["default"]
         return response_type(email=proposed)
 
-    return Client(f"http://{DOMAIN}/mcp", elicitation_handler=handler)
-
-
-def mail_to(email: str) -> list[dict]:
-    """Everything mailcatcher holds for this recipient."""
-    messages = json.loads(_get(f"{MAIL_API}/messages"))
-    return [m for m in messages if f"<{email}>" in m["recipients"]]
-
-
-def mail_body(message: dict) -> str:
-    return _get(f"{MAIL_API}/messages/{message['id']}.plain")
-
-
-def emailed_code(email: str) -> str:
-    message = _wait_for(
-        lambda: mail_to(email)[-1], f"the sign-in email for {email}", timeout=15
+    return Client(
+        f"http://{DOMAIN}/mcp", elicitation_handler=handler, client_info=client_info
     )
-    return re.search(r"code is: (\d{6})", mail_body(message)).group(1)
 
 
 async def sign_in(client: Client, email: str) -> None:
-    await client.call_tool("authenticate", {"email": email})
-    result = await client.call_tool(
-        "confirm_authentication", {"code": emailed_code(email)}
-    )
+    result = await client.call_tool("authenticate", {"email": email})
     assert "Signed in" in result.content[0].text
 
 
@@ -125,30 +109,26 @@ async def test_every_tool_is_published():
     assert tools == TOOLS
 
 
-async def test_signing_in_takes_a_real_emailed_code():
+async def test_signing_in_confirms_the_claude_accounts_email():
     email = f"{unique('signin')}@example.com"
     async with chat() as client:
         status = await client.call_tool("authentication_status")
         assert "not signed in" in status.content[0].text
 
-        await client.call_tool("authenticate", {"email": email})
-
-        (message,) = mail_to(email)
-        assert message["sender"].startswith("<cervo@localhost>")
-        assert message["subject"] == "Your cervo confirmation code"
-        body = mail_body(message)
-        code = re.search(r"code is: (\d{6})", body).group(1)
-        assert "expires" in body
-
-        wrong = "000000" if code != "000000" else "111111"
-        with pytest.raises(ToolError, match="not right"):
-            await client.call_tool("confirm_authentication", {"code": wrong})
-
-        result = await client.call_tool("confirm_authentication", {"code": code})
+        result = await client.call_tool("authenticate", {"email": email})
         assert "Signed in" in result.content[0].text
 
         status = await client.call_tool("authentication_status")
         assert email in status.content[0].text
+
+
+async def test_a_client_that_is_not_claude_cannot_sign_in():
+    stranger = Implementation(name="some-other-agent", version="1.0")
+    async with chat(client_info=stranger) as client:
+        with pytest.raises(ToolError, match="only works through Claude"):
+            await client.call_tool(
+                "authenticate", {"email": f"{unique('stranger')}@example.com"}
+            )
 
 
 async def test_a_sign_in_does_not_leak_into_other_conversations():
@@ -161,12 +141,13 @@ async def test_a_sign_in_does_not_leak_into_other_conversations():
         assert "not signed in" in status.content[0].text
 
 
-async def test_declining_the_confirmation_sends_nothing():
+async def test_declining_the_confirmation_leaves_the_chat_signed_out():
     email = f"{unique('declined')}@example.com"
     async with chat(action="decline") as client:
         with pytest.raises(ToolError, match="did not confirm"):
             await client.call_tool("authenticate", {"email": email})
-    assert mail_to(email) == []
+        status = await client.call_tool("authentication_status")
+        assert "not signed in" in status.content[0].text
 
 
 async def test_site_tools_demand_a_signed_in_chat():

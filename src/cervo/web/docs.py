@@ -30,16 +30,17 @@ def docs_page() -> HTMLResponse:
         layout.section(
             "GETTING STARTED",
             P(
-                "Connect your AI tool — Claude Code, a desktop assistant, "
-                "anything that speaks MCP — to cervo's server:"
+                "Connect Claude — Claude Code, the Claude apps, or "
+                "claude.ai; cervo works only with Claude — to cervo's "
+                "server:"
             ),
             layout.endpoint_chip(f"{config.origin()}/mcp"),
             P(
-                "Ask it to authenticate with cervo. You will be asked to "
-                "confirm your email address, and a six-digit code lands in "
-                "your inbox; paste it back into the chat. The confirmed "
-                "address owns everything you create, and the chat stays "
-                "signed in for four hours."
+                "Ask it to authenticate with cervo. Claude offers the email "
+                "address on your Claude account and you confirm it — that "
+                "is the whole sign-in. The confirmed address owns "
+                "everything you create, and the chat stays signed in for "
+                "four hours."
             ),
             P(
                 "Then ask for a website. A site's name is its slug — "
