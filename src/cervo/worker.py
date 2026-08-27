@@ -127,14 +127,14 @@ def _validate_file(payload: dict[str, Any]) -> None:
     """Check a submitted file before anything touches the disk.
 
     Nothing in the payload is trusted, even though the server checked it
-    once — the path and size are re-checked here, in the process that will
-    write. Every failure is a verdict, not an accident, so the job fails
-    for good instead of retrying.
+    once — the ownership, path, and size are re-checked here, in the
+    process that will write. Every failure is a verdict, not an accident,
+    so the job fails for good instead of retrying.
     """
     slug, path, content = payload["slug"], payload["path"], payload["content"]
     with connect() as conn:
-        gone = not website.exists(conn, slug)
-    if gone:
+        site = website.get(conn, slug)
+    if site is None or site.user_id != payload["user_id"]:
         raise job.PermanentError(f"the site {slug!r} was deleted")
     try:
         website.file_target(slug, path)
@@ -148,16 +148,17 @@ def _validate_file(payload: dict[str, Any]) -> None:
 def _write_file(payload: dict[str, Any]) -> None:
     """Write a validated file into its site's directory.
 
-    The site is checked again right before writing: a deleted site's
-    directory must not be resurrected — the freed slug could already
-    belong to someone else. (The window between this check and the write
-    is accepted.) Rewriting the same content makes a retried step safe;
-    caddy's file_server picks the file up with no reload.
+    The site is checked again right before writing — and against the
+    submitting owner's id, because a freed slug may already belong to
+    someone else, into whose site a stale write must never land. (The
+    window between this check and the write is accepted.) Rewriting the
+    same content makes a retried step safe; caddy's file_server picks the
+    file up with no reload.
     """
     slug, path, content = payload["slug"], payload["path"], payload["content"]
     with connect() as conn:
-        gone = not website.exists(conn, slug)
-    if gone:
+        site = website.get(conn, slug)
+    if site is None or site.user_id != payload["user_id"]:
         raise job.PermanentError(f"the site {slug!r} was deleted")
     try:
         target = website.file_target(slug, path)
@@ -202,16 +203,20 @@ def _delete_website(payload: dict[str, Any]) -> None:
 
     The row is already gone, so rendering the Caddyfile from the database
     drops the route; the directory is deleted after routing stops. Both
-    steps are idempotent, so a retried deletion is safe.
+    steps are idempotent, so a retried deletion is safe. The directory is
+    removed only if the slug is still free — a slug reclaimed before this
+    job runs (its cleanup delayed by a retry, say) keeps the new owner's
+    files, the same guarantee delete_file makes.
     """
     slug = payload["slug"]
     with connect() as conn:
         sites = website.all_sites(conn)
+        reclaimed = website.exists(conn, slug)
     caddy.render(sites)
     caddy.reload()
 
     site_dir = config.DATA_DIR / slug
-    if site_dir.exists():
+    if not reclaimed and site_dir.exists():
         shutil.rmtree(site_dir)
 
 

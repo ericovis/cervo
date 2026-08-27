@@ -190,13 +190,14 @@ async def write_file(
     """
     try:
         with connect() as conn:
-            state = website.submit_file(conn, slug, path, content, _owner(conn))
+            owner = _owner(conn)
+            state = website.submit_file(conn, slug, path, content, owner)
     except AppError as error:
         raise ToolError(str(error)) from error
 
     def refresh(current: website.FileWrite) -> website.FileWrite:
         with connect() as conn:
-            return website.file_state(conn, slug, path, content) or current
+            return website.file_state(conn, slug, path, content, owner.id) or current
 
     return await _follow(
         ctx, state, refresh, _file_progress_message, ("done", "failed")
@@ -282,12 +283,16 @@ def delete_website(slug: website.Slug) -> str:
 def website_status(slug: website.Slug) -> website.Website:
     """Report a site's deployment state, for the progress UI.
 
-    Only the deployment app calls this — it polls while the page is open.
-    Agents should use list_websites instead, which also scopes to the owner.
+    Only the deployment app calls this — it polls while the page is open,
+    scoped to the connected account just as list_websites is. Agents should
+    use list_websites instead. A slug the account does not own reads the
+    same as one that does not exist, so this never reveals another owner's
+    site or its state.
     """
     with connect() as conn:
+        owner = _owner(conn)
         site = website.get(conn, slug)
-    if site is None:
+    if site is None or site.user_id != owner.id:
         raise ToolError(f"There is no site with the slug {slug!r}.")
     return site
 

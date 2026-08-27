@@ -166,8 +166,10 @@ def submit_file(
     failure: the site must be the owner's, the path a safe relative
     ``.html``/``.css`` path, the content text within the size cap. What
     remains — content validation, the write itself — runs as a chain of
-    worker jobs; an identical submission already in flight is returned
-    instead of being queued twice.
+    worker jobs, whose payload carries the owner's id so a slug freed and
+    re-taken meanwhile never lets a stale write land in someone else's
+    site; an identical submission already in flight is returned instead of
+    being queued twice.
     """
     site = _dao.get(conn, slug)
     if site is None:
@@ -182,7 +184,7 @@ def submit_file(
     if size > MAX_FILE_BYTES:
         raise WebsiteError("Files are limited to 1 MiB.")
 
-    payload = {"slug": slug, "path": path, "content": content}
+    payload = {"slug": slug, "path": path, "content": content, "user_id": owner.id}
     current = job.latest_of(conn, FILE_CHAIN, payload)
     if current is not None and current.status in ("pending", "running"):
         return _file_write(slug, path, current)
@@ -196,10 +198,10 @@ def submit_file(
 
 
 def file_state(
-    conn: sqlite3.Connection, slug: str, path: str, content: str
+    conn: sqlite3.Connection, slug: str, path: str, content: str, user_id: int
 ) -> FileWrite | None:
     """The state of the newest chain writing exactly this file, if any."""
-    payload = {"slug": slug, "path": path, "content": content}
+    payload = {"slug": slug, "path": path, "content": content, "user_id": user_id}
     link = job.latest_of(conn, FILE_CHAIN, payload)
     return _file_write(slug, path, link) if link else None
 

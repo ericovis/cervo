@@ -260,4 +260,37 @@ def test_a_failed_deletion_retries_and_recovers(monkeypatch, data_dir, caddy_rel
     with connect() as conn:  # skip the retry delay, the way waiting would
         conn.execute("UPDATE job SET next_attempt_at = 0")
     assert deploy() == 1
+
+
+def test_a_stale_site_deletion_spares_a_reclaimed_slug(
+    monkeypatch, data_dir, caddy_reloads
+):
+    """A delayed site-deletion must not wipe the files of the slug's new owner.
+
+    A freed slug can be re-taken before its cleanup job runs. When it is, the
+    stale deletion must leave the new owner's directory alone — the same
+    guarantee delete_file already makes.
+    """
+    created("shared")
+    deploy()
+
+    _deleted("shared")  # row gone, cleanup queued
+    monkeypatch.setattr(caddy, "reload", _refuse)
+    deploy()  # the cleanup fails its reload and is held for a retry
+    assert (data_dir / "shared").exists()
+
+    monkeypatch.setattr(caddy, "reload", lambda: caddy_reloads.append(True))
+    with connect() as conn:  # the freed slug is taken and provisioned by someone else
+        newcomer = user.ensure(conn, "newcomer@example.com")
+        website.create(conn, "shared", newcomer)
+    deploy()
+    (data_dir / "shared" / "index.html").write_text("newcomer's page")
+
+    with connect() as conn:  # the held cleanup finally retries
+        conn.execute("UPDATE job SET next_attempt_at = 0")
+    deploy()
+
+    marker = data_dir / "shared" / "index.html"
+    assert marker.exists()  # the newcomer's files are untouched
+    assert marker.read_text() == "newcomer's page"
     assert not (data_dir / "stubborn").exists()

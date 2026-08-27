@@ -28,8 +28,8 @@ async def test_the_app_can_follow_a_deployment():
     async with chat() as c:
         await call(c, "create_website", slug="watched")
 
-    # The app polls from within the same connector session; any signed-in
-    # conversation can read a deployment's public status.
+    # The app polls from within the owner's own connector session, which is
+    # what website_status scopes to — here, the same account that created it.
     async with chat() as page:
         before = json.loads(await call(page, "website_status", slug="watched"))
         deploy()

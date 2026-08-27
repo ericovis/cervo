@@ -70,6 +70,30 @@ async def test_dns_safe_slugs_are_accepted(slug):
         assert slug in await call(c, "create_website", slug=slug)
 
 
+@pytest.mark.parametrize(
+    "slug",
+    [
+        "a" * 64,  # one past the DNS label limit
+        "a--b",  # consecutive hyphens
+        "café",  # non-ascii latin
+        "\u0430dmin",  # cyrillic a (U+0430), a homoglyph of ascii 'a'
+        "site.com",  # a dot would spill into another subdomain label
+        "site/../etc",  # path characters
+        "site\nname",  # a newline that could smuggle into the Caddyfile
+        "site name",
+    ],
+)
+async def test_hostile_slugs_are_rejected(slug):
+    async with chat() as c:
+        with pytest.raises(ToolError):
+            await call(c, "create_website", slug=slug)
+
+
+async def test_a_slug_at_the_length_limit_is_accepted():
+    async with chat() as c:
+        assert "a" * 63 in await call(c, "create_website", slug="a" * 63)
+
+
 def test_the_service_creates_and_reports_existence():
     with connect() as conn:
         owner = user.ensure(conn, OWNER)
