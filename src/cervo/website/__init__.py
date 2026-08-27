@@ -5,11 +5,13 @@ ruff's TID251 rule enforces it. Callers go through the service.
 """
 
 from cervo.website.service import (
+    DELETE_KIND,
     DEPLOY_KIND,
     WebsiteError,
     all_sites,
     create,
     create_tables,
+    delete,
     exists,
     for_user,
     get,
@@ -18,6 +20,7 @@ from cervo.website.service import (
 from cervo.website.types import Slug, Website, WebsiteStatus
 
 __all__ = [
+    "DELETE_KIND",
     "DEPLOY_KIND",
     "Slug",
     "Website",
@@ -26,6 +29,7 @@ __all__ = [
     "all_sites",
     "create",
     "create_tables",
+    "delete",
     "exists",
     "for_user",
     "get",

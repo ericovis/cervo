@@ -1,4 +1,4 @@
-"""Creating and listing sites, on behalf of the user who owns them.
+"""Creating, listing, and deleting sites, on behalf of the user who owns them.
 
 Creating a site writes the row and queues a deployment job; the worker
 process does the provisioning. A site's ``status`` and ``error`` therefore
@@ -14,6 +14,7 @@ from cervo.website import _dao
 from cervo.website.types import Website, WebsiteStatus
 
 DEPLOY_KIND = "website.deploy"
+DELETE_KIND = "website.delete"
 
 # DATA_DIR/caddyfile would collide with the rendered DATA_DIR/Caddyfile on a
 # case-insensitive filesystem (macOS development).
@@ -62,6 +63,23 @@ def create(conn: sqlite3.Connection, slug: str, owner: User) -> Website:
     if deployment.status == "done":
         raise WebsiteError(f"You already own {slug!r}, and it is live.")
     raise WebsiteError(f"You already own {slug!r}; its deployment is in progress.")
+
+
+def delete(conn: sqlite3.Connection, slug: str, owner: User) -> None:
+    """Delete ``owner``'s site and queue the removal of its traces.
+
+    The row goes immediately — the slug is free again and the site stops
+    being listed — and a worker job then takes the route out of the
+    Caddyfile and deletes the site's directory. Raises if there is no such
+    site or it belongs to someone else.
+    """
+    site = _dao.get(conn, slug)
+    if site is None:
+        raise WebsiteError(f"There is no site with the slug {slug!r}.")
+    if site.user_id != owner.id:
+        raise WebsiteError(f"The site {slug!r} belongs to someone else.")
+    _dao.delete(conn, slug)
+    job.enqueue(conn, DELETE_KIND, {"slug": slug})
 
 
 def get(conn: sqlite3.Connection, slug: str) -> Website | None:

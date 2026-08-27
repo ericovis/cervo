@@ -190,6 +190,31 @@ def list_websites(ctx: Context) -> list[website.Website]:
         raise ToolError(str(error)) from error
 
 
+@app.tool
+def delete_website(slug: website.Slug, ctx: Context) -> str:
+    """Delete a site the signed-in user owns.
+
+    Requires this chat to be signed in, and the site must belong to the
+    signed-in user. Deletion is permanent — the site's files are removed
+    and its slug is freed for anyone to take — so only call this once the
+    user has clearly asked for this specific site to be deleted.
+
+    The site disappears from list_websites immediately; a background job
+    then stops routing the subdomain and deletes the site's files.
+    """
+    try:
+        with connect() as conn:
+            session = auth.require(conn, ctx.session_id)
+            owner = user.ensure(conn, session.email)
+            website.delete(conn, slug, owner)
+    except AppError as error:
+        raise ToolError(str(error)) from error
+    return (
+        f"The site {slug!r} was deleted. Its files and routing are being "
+        "removed in the background."
+    )
+
+
 @app.tool(app=AppConfig(visibility=["app"]))
 def website_status(slug: website.Slug) -> website.Website:
     """Report a site's deployment state, for the progress UI.

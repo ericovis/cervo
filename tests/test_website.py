@@ -1,4 +1,4 @@
-"""Creating sites, and who is allowed to."""
+"""Creating and deleting sites, and who is allowed to."""
 
 import sqlite3
 from datetime import UTC, datetime
@@ -206,3 +206,66 @@ async def test_listing_shows_only_your_own_sites(mailbox):
     assert [site["slug"] for site in result.structured_content["result"]] == [
         "bobs-place"
     ]
+
+
+async def test_deleting_a_site_needs_a_signed_in_chat():
+    async with chat() as c:
+        with pytest.raises(ToolError, match="not authenticated"):
+            await call(c, "delete_website", slug="mine")
+
+
+async def test_the_owner_deletes_their_own_site(mailbox):
+    async with chat() as c:
+        await sign_in(c, mailbox)
+        await call(c, "create_website", slug="doomed")
+        assert "deleted" in await call(c, "delete_website", slug="doomed")
+        result = await c.call_tool("list_websites")
+
+    assert result.structured_content["result"] == []
+    with connect() as conn:
+        assert not website.exists(conn, "doomed")
+
+
+async def test_a_site_cannot_be_deleted_by_someone_else(mailbox):
+    async with chat() as alice:
+        await sign_in(alice, mailbox, "alice@example.com")
+        await call(alice, "create_website", slug="alices-only")
+
+    async with chat() as bob:
+        await sign_in(bob, mailbox, "bob@example.com")
+        with pytest.raises(ToolError, match="someone else"):
+            await call(bob, "delete_website", slug="alices-only")
+
+    with connect() as conn:
+        assert website.exists(conn, "alices-only")
+
+
+async def test_deleting_a_site_that_does_not_exist_is_refused(mailbox):
+    async with chat() as c:
+        await sign_in(c, mailbox)
+        with pytest.raises(ToolError, match="no site"):
+            await call(c, "delete_website", slug="ghost")
+
+
+def test_the_service_deletes_the_row_and_queues_the_cleanup():
+    with connect() as conn:
+        owner = user.ensure(conn, OWNER)
+        website.create(conn, "cleaned", owner)
+        website.delete(conn, "cleaned", owner)
+        cleanup = job.latest(conn, website.DELETE_KIND, {"slug": "cleaned"})
+        assert not website.exists(conn, "cleaned")
+
+    assert cleanup is not None
+    assert cleanup.status == "pending"
+
+
+def test_a_deleted_slug_is_free_to_take_again():
+    with connect() as conn:
+        owner = user.ensure(conn, OWNER)
+        someone_else = user.ensure(conn, "someone-else@example.com")
+        website.create(conn, "recycled", owner)
+        website.delete(conn, "recycled", owner)
+        site = website.create(conn, "recycled", someone_else)
+
+    assert site.user_id == someone_else.id
+    assert site.status == "pending"

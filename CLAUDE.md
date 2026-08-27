@@ -130,6 +130,11 @@ mid-job needs no shutdown protocol. At startup the worker also "heals": it
 renders and reloads the Caddyfile even with no jobs queued, so a fresh checkout
 or restored data directory starts serving immediately.
 
+Deleting a website (`delete_website`, owner-only) is the mirror image: the
+row is deleted immediately — the slug frees up and the site stops being
+listed — and a `website.delete` job has the worker re-render the Caddyfile
+(dropping the route) and then remove `DATA_DIR/{slug}/`.
+
 A site's `status`/`error` shown by the tools is its latest deploy job's state
 (`running` reads as `deploying`, `done` as `live`). Calling `create_website` on
 your own failed site queues a fresh deployment; the slug `caddyfile` is reserved

@@ -1,4 +1,4 @@
-"""The worker deploying sites: files, Caddyfile, reloads, retries."""
+"""The worker deploying and deleting sites: files, Caddyfile, reloads, retries."""
 
 from cervo import caddy, user, website, worker
 from cervo.db import connect
@@ -137,3 +137,49 @@ async def test_an_agent_watches_a_site_go_live(mailbox):
     assert site["status"] == "live"
     assert site["error"] is None
     assert site["url"] == "http://watched.localhost"
+
+
+def _deleted(slug: str, email: str = OWNER) -> None:
+    with connect() as conn:
+        owner = user.ensure(conn, email)
+        website.delete(conn, slug, owner)
+
+
+def test_a_deletion_removes_the_files_and_the_route(data_dir, caddy_reloads):
+    created("doomed")
+    deploy()
+    assert (data_dir / "doomed" / "index.html").exists()
+
+    _deleted("doomed")
+    assert deploy() == 1
+
+    assert not (data_dir / "doomed").exists()
+    caddyfile = (data_dir / "Caddyfile").read_text()
+    assert "http://doomed.localhost {" not in caddyfile
+    assert "http://localhost {" in caddyfile  # cervo itself is still served
+    assert caddy_reloads == [True, True]
+
+
+def test_deleting_mid_deployment_leaves_nothing_behind(data_dir):
+    created("halfway")  # deployment queued but never run
+    _deleted("halfway")
+    deploy()  # the orphaned deployment fails, the cleanup still runs
+
+    assert not (data_dir / "halfway").exists()
+    assert "halfway" not in (data_dir / "Caddyfile").read_text()
+
+
+def test_a_failed_deletion_retries_and_recovers(monkeypatch, data_dir, caddy_reloads):
+    created("stubborn")
+    deploy()
+
+    _deleted("stubborn")
+    monkeypatch.setattr(caddy, "reload", _refuse)
+    deploy()
+    assert (data_dir / "stubborn").exists()  # files survive until routing stops
+
+    monkeypatch.setattr(caddy, "reload", lambda: caddy_reloads.append(True))
+    with connect() as conn:  # skip the retry delay, the way waiting would
+        conn.execute("UPDATE job SET next_attempt_at = 0")
+    assert deploy() == 1
+    assert not (data_dir / "stubborn").exists()

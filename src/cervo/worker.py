@@ -11,6 +11,7 @@ behavior deterministically.
 """
 
 import logging
+import shutil
 import threading
 from typing import Any
 
@@ -96,7 +97,28 @@ def _deploy_website(payload: dict[str, Any]) -> None:
     caddy.reload()
 
 
-_HANDLERS = {website.DEPLOY_KIND: _deploy_website}
+def _delete_website(payload: dict[str, Any]) -> None:
+    """Stop routing a deleted site and remove its files.
+
+    The row is already gone, so rendering the Caddyfile from the database
+    drops the route; the directory is deleted after routing stops. Both
+    steps are idempotent, so a retried deletion is safe.
+    """
+    slug = payload["slug"]
+    with connect() as conn:
+        sites = website.all_sites(conn)
+    caddy.render(sites)
+    caddy.reload()
+
+    site_dir = config.DATA_DIR / slug
+    if site_dir.exists():
+        shutil.rmtree(site_dir)
+
+
+_HANDLERS = {
+    website.DEPLOY_KIND: _deploy_website,
+    website.DELETE_KIND: _delete_website,
+}
 
 
 def _heal() -> None:

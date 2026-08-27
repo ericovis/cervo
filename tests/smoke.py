@@ -34,6 +34,7 @@ TOOLS = {
     "authentication_status",
     "create_website",
     "list_websites",
+    "delete_website",
     "website_status",
 }
 
@@ -174,6 +175,8 @@ async def test_site_tools_demand_a_signed_in_chat():
             await client.call_tool("create_website", {"slug": unique("nope")})
         with pytest.raises(ToolError, match="not authenticated"):
             await client.call_tool("list_websites")
+        with pytest.raises(ToolError, match="not authenticated"):
+            await client.call_tool("delete_website", {"slug": unique("nope")})
 
 
 async def test_bad_slugs_are_rejected():
@@ -290,6 +293,29 @@ async def test_each_owner_sees_only_their_own_sites():
     listed = [s["slug"] for s in result.structured_content["result"]]
     assert theirs in listed
     assert mine not in listed
+
+
+async def test_a_deleted_site_stops_being_served():
+    slug = unique("gone")
+    async with chat() as client:
+        await sign_in(client, f"{unique('owner')}@example.com")
+        await client.call_tool("create_website", {"slug": slug})
+        await wait_for_deployment(client, slug)
+
+        result = await client.call_tool("delete_website", {"slug": slug})
+        assert "deleted" in result.content[0].text
+
+        listing = await client.call_tool("list_websites")
+        assert slug not in [s["slug"] for s in listing.structured_content["result"]]
+
+    def gone():
+        try:
+            body = _get(f"http://{DOMAIN}/", host=f"{slug}.{DOMAIN}")
+        except urllib.error.HTTPError:
+            return
+        assert slug not in body, "the site is still being served"
+
+    _wait_for(gone, "the deleted site to stop being served", timeout=30)
 
 
 async def test_an_unknown_subdomain_serves_no_site():
