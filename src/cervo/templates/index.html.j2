@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ slug }} — hosted by cervo</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 40rem;
+      margin: 4rem auto;
+      padding: 0 1.5rem;
+      line-height: 1.6;
+      color: #2a2a2a;
+    }
+    h1 { font-size: 1.6rem; }
+    h2 { font-size: 1.1rem; margin-top: 2rem; }
+    code {
+      background: #f0f0ee;
+      padding: 0.1rem 0.35rem;
+      border-radius: 4px;
+      font-size: 0.9em;
+      overflow-wrap: anywhere;
+    }
+    footer { margin-top: 3rem; font-size: 0.85rem; color: #777; }
+  </style>
+</head>
+<body>
+  <h1>You made it! 🎉</h1>
+  <p>
+    This site was successfully deployed using cervo on {{ deployed_at }},
+    and is served at <a href="{{ url }}">{{ url }}</a>.
+  </p>
+
+  <h2>About cervo</h2>
+  <p>
+    <a href="https://github.com/ericovis/cervo">Cervo</a> is a demo app for
+    managing static website hosting on a shared VPS, created by
+    Eric Magalhães a.k.a. <a href="https://ericovis.com">ericovis</a>.
+  </p>
+
+  <h2>Updating this site</h2>
+  <p>
+    Everything here is managed by chatting with an AI — there is no
+    dashboard and no server to log into. Point your AI tool of choice at
+    cervo's MCP server:
+  </p>
+  <p><code>{{ mcp_url }}</code></p>
+  <p>Then just ask. Try prompts like:</p>
+  <ul>
+    <li>“Authenticate with cervo”</li>
+    <li>“List my websites”</li>
+    <li>“Create a website called my-cool-site”</li>
+  </ul>
+
+  <footer>Hosted by <a href="https://github.com/ericovis/cervo">cervo</a>.</footer>
+</body>
+</html>

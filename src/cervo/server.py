@@ -142,6 +142,13 @@ def create_website(slug: website.Slug, ctx: Context) -> website.Website:
     Requires this chat to be signed in — the owner is taken from the session,
     never from an argument. If it is not, or the session has expired, this
     fails with instructions to call authenticate; do that and then retry.
+
+    Creation queues a deployment job that a worker runs in the background:
+    the returned site starts as status "pending" and is normally "live" at
+    its url within seconds — check list_websites for progress, and report a
+    "failed" status's error to the user. Deployments retry on their own, but
+    calling this again with the slug of your own failed site queues a fresh
+    deployment.
     """
     try:
         with connect() as conn:
@@ -157,7 +164,9 @@ def list_websites(ctx: Context) -> list[website.Website]:
     """List every site the signed-in user owns.
 
     Requires this chat to be signed in. An empty list means they have not
-    created any yet, which is not an error.
+    created any yet, which is not an error. Each site carries its url and the
+    state of its deployment: status (pending, deploying, live, or failed)
+    and, when it failed, the error.
     """
     try:
         with connect() as conn:

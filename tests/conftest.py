@@ -1,7 +1,7 @@
-"""Fixtures that keep tests off the development database and off SMTP.
+"""Fixtures that keep tests off the development data, SMTP, and caddy.
 
-Both guards are autouse, so a test cannot reach real data or a real mail
-server even by forgetting to ask for a fixture.
+All three guards are autouse, so a test cannot reach real data, a real mail
+server, or caddy's admin API even by forgetting to ask for a fixture.
 """
 
 import re
@@ -11,7 +11,7 @@ import pytest
 from fastmcp import Client
 from fastmcp.client.elicitation import ElicitResult
 
-from cervo import config, mail
+from cervo import caddy, config, mail, worker
 from cervo.schema import create_tables
 from cervo.server import app
 
@@ -31,6 +31,16 @@ def data_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DATABASE_PATH", data / "cervo.db")
     create_tables()
     return data
+
+
+@pytest.fixture(autouse=True)
+def domain(monkeypatch):
+    """Pin the domain, so URL assertions hold wherever the suite runs.
+
+    The test stack sets DOMAIN=caddy for the smoke test's sake; the unit
+    suite never talks to the network, so it always sees the default.
+    """
+    monkeypatch.setattr(config, "DOMAIN", "localhost")
 
 
 @dataclass
@@ -70,6 +80,34 @@ def mailbox(monkeypatch) -> Mailbox:
 
     monkeypatch.setattr(mail, "send", fake_send)
     return sent
+
+
+@pytest.fixture(autouse=True)
+def caddy_reloads(monkeypatch) -> list:
+    """Capture caddy reloads instead of talking to its admin API.
+
+    Only the network call is replaced: rendering the Caddyfile writes under
+    the per-test data directory, so tests can assert on the real file.
+    """
+    reloads = []
+
+    def fake_reload() -> None:
+        reloads.append(True)
+
+    monkeypatch.setattr(caddy, "reload", fake_reload)
+    return reloads
+
+
+def deploy() -> int:
+    """Run every due job the way the worker service would, deterministically.
+
+    Returns how many jobs ran, so a test can assert there was (or was not)
+    work to do.
+    """
+    ran = 0
+    while worker.run_once():
+        ran += 1
+    return ran
 
 
 def chat(confirms: str | None = None, *, action: str = "accept") -> Client:

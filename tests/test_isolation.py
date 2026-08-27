@@ -1,10 +1,11 @@
 """The guarantees the rest of the suite leans on.
 
-Every test runs against a throwaway database and a fake mail server. If these
-fail, treat results from the other files as suspect.
+Every test runs against a throwaway database, a fake mail server, and a fake
+caddy admin API. If these fail, treat results from the other files as
+suspect.
 """
 
-from cervo import config, mail
+from cervo import caddy, config, mail
 from cervo.db import connect
 from tests.conftest import OWNER, call, chat
 
@@ -38,6 +39,13 @@ def test_smtp_is_never_reached(mailbox):
     assert mail.send.__name__ == "fake_send"
     mail.send(to=OWNER, subject="probe", body="code is: 424242")
     assert mailbox.last_code == "424242"
+
+
+def test_caddy_is_never_reached(caddy_reloads):
+    """`caddy.reload` is replaced, so nothing can reach the admin API."""
+    assert caddy.reload.__name__ == "fake_reload"
+    caddy.reload()
+    assert caddy_reloads == [True]
 
 
 async def test_the_tables_exist_before_a_test_body_runs():

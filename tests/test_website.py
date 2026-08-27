@@ -1,11 +1,12 @@
 """Creating sites, and who is allowed to."""
 
 import sqlite3
+from datetime import UTC, datetime
 
 import pytest
 from fastmcp.exceptions import ToolError
 
-from cervo import user, website
+from cervo import job, user, website
 from cervo.db import connect
 from tests.conftest import OWNER, call, chat, sign_in
 
@@ -33,14 +34,22 @@ async def test_the_owner_comes_from_the_session(mailbox):
     with connect() as conn:
         alice = user.by_email(conn, "alice@example.com")
 
-    assert result.structured_content == {"slug": "alices-site", "user_id": alice.id}
+    content = dict(result.structured_content)
+    assert content.pop("created_at") == content.pop("updated_at")
+    assert content == {
+        "slug": "alices-site",
+        "user_id": alice.id,
+        "status": "pending",
+        "error": None,
+        "url": "http://alices-site.localhost",
+    }
 
 
-async def test_a_taken_slug_is_refused(mailbox):
+async def test_recreating_your_own_site_mid_deployment_is_refused(mailbox):
     async with chat() as c:
         await sign_in(c, mailbox)
         await call(c, "create_website", slug="taken")
-        with pytest.raises(ToolError, match="already taken"):
+        with pytest.raises(ToolError, match="in progress"):
             await call(c, "create_website", slug="taken")
 
 
@@ -88,6 +97,15 @@ def test_the_service_creates_and_reports_existence():
         assert website.exists(conn, "direct")
 
 
+def test_a_new_site_is_stamped_with_its_creation_time():
+    before = datetime.now(UTC)
+    with connect() as conn:
+        owner = user.ensure(conn, OWNER)
+        site = website.create(conn, "stamped", owner)
+    assert before <= site.created_at <= datetime.now(UTC)
+    assert site.updated_at == site.created_at
+
+
 def test_the_service_refuses_a_duplicate_slug():
     with connect() as conn:
         owner = user.ensure(conn, OWNER)
@@ -97,10 +115,55 @@ def test_the_service_refuses_a_duplicate_slug():
             website.create(conn, "once", someone_else)
 
 
+def test_a_reserved_slug_is_refused():
+    with connect() as conn:
+        owner = user.ensure(conn, OWNER)
+        with pytest.raises(website.WebsiteError, match="reserved"):
+            website.create(conn, "caddyfile", owner)
+        assert not website.exists(conn, "caddyfile")
+
+
+def test_creating_a_site_queues_its_deployment():
+    with connect() as conn:
+        owner = user.ensure(conn, OWNER)
+        site = website.create(conn, "queued", owner)
+        deployment = job.latest(conn, website.DEPLOY_KIND, {"slug": "queued"})
+
+    assert site.status == "pending"
+    assert deployment is not None
+    assert deployment.status == "pending"
+
+
+def test_a_failed_deployment_is_queued_again_by_its_owner():
+    with connect() as conn:
+        owner = user.ensure(conn, OWNER)
+        website.create(conn, "flaky", owner)
+        conn.execute("UPDATE job SET status = 'failed', error = 'boom'")
+
+    with connect() as conn:
+        site = website.create(conn, "flaky", owner)
+        deployments = conn.execute("SELECT status FROM job ORDER BY id").fetchall()
+
+    assert site.status == "pending"
+    assert [row["status"] for row in deployments] == ["failed", "pending"]
+
+
+def test_a_live_site_is_not_deployed_again():
+    with connect() as conn:
+        owner = user.ensure(conn, OWNER)
+        website.create(conn, "settled", owner)
+        conn.execute("UPDATE job SET status = 'done'")
+
+    with connect() as conn:
+        with pytest.raises(website.WebsiteError, match="live"):
+            website.create(conn, "settled", owner)
+        assert conn.execute("SELECT count(*) c FROM job").fetchone()["c"] == 1
+
+
 def test_a_site_cannot_point_at_a_user_who_does_not_exist():
     """The foreign key is enforced, not decorative."""
     with pytest.raises(sqlite3.IntegrityError), connect() as conn:
-        conn.execute("INSERT INTO website VALUES (?, ?)", ("orphan", 9999))
+        conn.execute("INSERT INTO website VALUES (?, ?, 0, 0)", ("orphan", 9999))
 
 
 async def test_listing_needs_a_signed_in_chat():
