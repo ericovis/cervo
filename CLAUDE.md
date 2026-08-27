@@ -12,7 +12,7 @@ bin/dev    # docker compose up -d — the whole environment
 
 The stack is four services, all sharing the `.data` volume at `/mnt/data`:
 
-- `app` — the MCP server. Publishes no port; caddy reverse-proxies it at `http://localhost` (MCP endpoint: `http://localhost/mcp`).
+- `app` — the MCP server and the public website, one process. Publishes no port; caddy reverse-proxies it at `http://localhost` — the homepage (with docs at `/docs`) — and the MCP endpoint stays `http://localhost/mcp`.
 - `worker` — the job worker (`cervo-worker`). Boots first, creates the database tables, and renders the initial Caddyfile.
 - `caddy` — the front door on ports 80/443. Runs on the generated `/mnt/data/Caddyfile` and serves the sites at `http://{slug}.localhost`. Its unauthenticated admin API (`caddy:2019`) is reachable only on the compose network. On a fresh checkout it restarts until the worker first renders the Caddyfile — that's the `restart: unless-stopped` doing its job, not a bug.
 - `mail` — mailcatcher (SMTP on 1025, web UI at http://localhost:1080). Development mail goes here, not to real SMTP.
@@ -43,6 +43,13 @@ What actually varies between environments is read from the environment / `.env` 
 - `src/cervo/server.py` — the FastMCP instance (`app`) and all tool definitions.
   `authenticate` uses MCP elicitation to have the human confirm the address before
   any code is sent, so a client that cannot elicit cannot sign in.
+- `src/cervo/web/` — the public website: pages built from FastHTML fasttags on
+  the design system (`design-system/`), registered on the FastMCP app as custom
+  HTTP routes (`web.register(app)` at the bottom of server.py). FastMCP appends
+  custom routes after `/mcp`, so they cannot shadow it; among the pages the
+  catch-all 404 route must stay registered last. The same components are the
+  single source for a site's default page (`web.default_page`), which the
+  worker renders and writes at deploy time.
 - `src/cervo/worker.py` — the job worker: polls for due jobs, dispatches them by
   kind (`_HANDLERS`), reaps timed-out ones. Entry point `cervo-worker`.
 - `src/cervo/config.py` — settings (see above)
@@ -54,8 +61,8 @@ What actually varies between environments is read from the environment / `.env` 
 - `src/cervo/mail.py` — sending mail over SMTP
 - `src/cervo/caddy.py` — rendering the Caddyfile from the database and reloading
   caddy over its admin API
-- `src/cervo/templates/` — jinja2 templates: the Caddyfile and a site's default
-  `index.html`
+- `src/cervo/templates/` — jinja2 templates: the Caddyfile and the MCP app
+  pages (deployment progress, websites overview)
 - `src/cervo/__init__.py` — `main()` entrypoint (the `app` service)
 - `Dockerfile` — one image for `app`, `worker`, and the test runner
   (`ENTRYPOINT ["uv", "run"]`)
@@ -163,7 +170,8 @@ asserts the guarantees hold.
 Write tests against the MCP tools rather than the services: `chat()` returns a
 client whose connection is one conversation (its own session id, so its own
 sign-in) with a scripted human answering the elicitation, and `sign_in()` runs the
-whole handshake. Read codes out of the `mailbox` fixture the way a user reads their
+whole handshake. The website's pages are tested through a starlette `TestClient`
+over `app.http_app()` (`tests/test_web.py`). Read codes out of the `mailbox` fixture the way a user reads their
 inbox. The worker never runs as a process in tests — call `worker.run_once()` (or
 the `deploy()` helper) for deterministic deployments.
 

@@ -29,6 +29,10 @@ def test_a_deployment_provisions_the_site(data_dir, caddy_reloads):
     page = (data_dir / "mysite" / "index.html").read_text()
     assert "mysite" in page
     assert "http://mysite.localhost" in page
+    # The page comes from the website's own components: shared design
+    # tokens, footer links absolute to the apex domain.
+    assert "--accent" in page
+    assert "http://localhost/docs" in page
 
     caddyfile = (data_dir / "Caddyfile").read_text()
     assert "admin 0.0.0.0:2019" in caddyfile

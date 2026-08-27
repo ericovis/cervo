@@ -14,17 +14,13 @@ import logging
 import threading
 from typing import Any
 
-from jinja2 import Environment, PackageLoader
-
-from cervo import caddy, config, job, website
+from cervo import caddy, config, job, web, website
 from cervo.db import connect
 from cervo.schema import create_tables
 
 _POLL_INTERVAL = 2  # seconds
 
 _log = logging.getLogger(__name__)
-
-_env = Environment(loader=PackageLoader("cervo"), autoescape=True)
 
 
 def main() -> None:
@@ -89,11 +85,10 @@ def _deploy_website(payload: dict[str, Any]) -> None:
     index = site_dir / "index.html"
     if not index.exists():
         index.write_text(
-            _env.get_template("index.html.j2").render(
+            web.default_page(
                 slug=slug,
                 url=site.url,
                 deployed_at=site.created_at.strftime("%B %-d, %Y at %H:%M UTC"),
-                mcp_url=f"http://{config.DOMAIN}/mcp",
             )
         )
 

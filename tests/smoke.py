@@ -217,6 +217,38 @@ async def test_a_site_is_created_deployed_and_served():
     assert "cervo" in page
 
 
+def test_the_homepage_is_served():
+    page = _get(f"http://{DOMAIN}/")
+    assert ">cervo</a>" in page  # the wordmark
+    assert f"http://{DOMAIN}/mcp" in page  # the endpoint chip
+    assert 'href="/docs"' in page
+
+
+def test_docs_terms_and_privacy_are_served():
+    assert "HOW DEPLOYMENTS WORK" in _get(f"http://{DOMAIN}/docs")
+    assert "TERMS OF SERVICE" in _get(f"http://{DOMAIN}/terms")
+    assert "PRIVACY" in _get(f"http://{DOMAIN}/privacy")
+
+
+def test_unknown_paths_get_the_styled_404():
+    with pytest.raises(urllib.error.HTTPError) as error:
+        _get(f"http://{DOMAIN}/no-such-page")
+    assert error.value.code == 404
+    assert "NOT FOUND" in error.value.read().decode()
+
+
+async def test_the_homepage_catalogs_live_sites():
+    slug = unique("public")
+    async with chat() as owner:
+        await sign_in(owner, f"{unique('owner')}@example.com")
+        await owner.call_tool("create_website", {"slug": slug})
+        await wait_for_deployment(owner, slug)
+
+    page = _get(f"http://{DOMAIN}/")
+    assert slug in page
+    assert f"http://{slug}.{DOMAIN}" in page
+
+
 async def test_the_progress_app_can_follow_a_deployment():
     slug = unique("watched")
     async with chat() as owner:

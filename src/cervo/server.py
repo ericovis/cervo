@@ -5,7 +5,7 @@ from jinja2 import Environment, PackageLoader
 from mcp.types import ClientCapabilities, ElicitationCapability
 from pydantic import BaseModel, EmailStr, Field, create_model
 
-from cervo import auth, user, website
+from cervo import auth, user, web, website
 from cervo.db import connect
 from cervo.errors import AppError
 
@@ -228,3 +228,6 @@ def websites_view() -> str:
     page, and unsettled deployments are followed through website_status.
     """
     return _env.get_template("websites.html.j2").render()
+
+
+web.register(app)

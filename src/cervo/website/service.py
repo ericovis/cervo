@@ -80,6 +80,12 @@ def all_sites(conn: sqlite3.Connection) -> list[Website]:
     return _dao.all_sites(conn)
 
 
+def live(conn: sqlite3.Connection) -> list[Website]:
+    """Every site whose latest deployment is live, for the public catalog."""
+    sites = (_with_deployment(conn, site) for site in _dao.all_sites(conn))
+    return [site for site in sites if site.status == "live"]
+
+
 def exists(conn: sqlite3.Connection, slug: str) -> bool:
     """Whether a site with this slug has been created."""
     return _dao.exists(conn, slug)
