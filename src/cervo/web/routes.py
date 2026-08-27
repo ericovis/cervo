@@ -5,7 +5,7 @@ from fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import Response
 
-from cervo.web import docs, home, layout, legal
+from cervo.web import docs, home, layout, legal, verify
 
 
 def register(app: FastMCP) -> None:
@@ -31,6 +31,20 @@ def register(app: FastMCP) -> None:
     @app.custom_route("/privacy", methods=["GET"])
     async def privacy_route(request: Request) -> Response:
         return legal.privacy_page()
+
+    # The OAuth sign-in pages: /authorize (mounted by the auth provider,
+    # ahead of these routes) redirects here to have the email verified.
+    @app.custom_route("/verify", methods=["GET"])
+    async def verify_route(request: Request) -> Response:
+        return verify.verify_page(request)
+
+    @app.custom_route("/verify/email", methods=["POST"])
+    async def verify_email_route(request: Request) -> Response:
+        return await verify.submit_email(request)
+
+    @app.custom_route("/verify/code", methods=["POST"])
+    async def verify_code_route(request: Request) -> Response:
+        return await verify.submit_code(request)
 
     # The catch-all: keep this registered last, or it eats the pages above.
     @app.custom_route("/{path:path}", methods=["GET"])

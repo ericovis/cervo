@@ -4,36 +4,37 @@ Deliberately not collected by a plain ``pytest`` run — the filename does not
 match ``test_*.py`` — because these need the test stack up and reach it by
 service name, so they only run from inside that network (``bin/smoke``).
 
-Everything goes through the front door, exactly like a real client: the MCP
-server at ``http://{DOMAIN}/mcp``, reached by a client introducing itself as
-Claude, and deployed sites fetched via caddy with a Host header (only service
-names resolve inside the network).
+Everything goes through the front door, exactly like Claude: OAuth discovery
+and sign-in against ``http://{DOMAIN}`` (this runner shares caddy's network
+namespace, so localhost is the front door), verification codes read from
+mailcatcher's API the way a user reads their inbox, the MCP endpoint reached
+with the minted Bearer token, and deployed sites fetched via caddy with a
+Host header.
 """
 
 import asyncio
-import contextlib
+import base64
+import hashlib
 import json
 import os
+import re
+import secrets
 import time
 import urllib.error
 import urllib.request
 import uuid
+from urllib.parse import parse_qs, urlparse
 
+import httpx
 import pytest
 from fastmcp import Client
-from fastmcp.client.elicitation import ElicitResult
 from fastmcp.exceptions import ToolError
-from mcp.types import Implementation
 
 DOMAIN = os.environ.get("DOMAIN", "localhost")
-
-# What a real Claude client sends in the initialize handshake; the server
-# only signs in clients whose name says Claude.
-CLAUDE = Implementation(name="claude-code", version="0.0.0-smoke")
+MAIL_API = "http://mail:1080"
+CALLBACK = "http://localhost:33418/callback"
 
 TOOLS = {
-    "authenticate",
-    "authentication_status",
     "create_website",
     "list_websites",
     "delete_website",
@@ -60,11 +61,10 @@ def _wait_for(check, what: str, timeout: float = 60):
 
 @pytest.fixture(scope="module", autouse=True)
 def front_door():
-    """Wait out the first boot: caddy restarts until the worker's render."""
+    """Wait out the first boot: caddy serves a stub until the worker's render."""
 
     def answers() -> None:
-        with contextlib.suppress(urllib.error.HTTPError):
-            _get(f"http://{DOMAIN}/")
+        assert "cervo" in _get(f"http://{DOMAIN}/")
 
     _wait_for(answers, "caddy to proxy cervo")
 
@@ -73,23 +73,99 @@ def unique(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:8]}"
 
 
-def chat(*, action: str = "accept", client_info: Implementation = CLAUDE) -> Client:
-    """One conversation against the real server, with a scripted human."""
+def mail_to(email: str) -> list[dict]:
+    """Everything mailcatcher holds for this recipient."""
+    messages = json.loads(_get(f"{MAIL_API}/messages"))
+    return [m for m in messages if f"<{email}>" in m["recipients"]]
 
-    async def handler(message, response_type, params, context):
-        if action != "accept":
-            return ElicitResult(action=action)
-        proposed = params.requestedSchema["properties"]["email"]["default"]
-        return response_type(email=proposed)
 
-    return Client(
-        f"http://{DOMAIN}/mcp", elicitation_handler=handler, client_info=client_info
+def emailed_code(email: str) -> str:
+    message = _wait_for(
+        lambda: mail_to(email)[-1], f"the verification email for {email}", timeout=15
     )
+    body = _get(f"{MAIL_API}/messages/{message['id']}.plain")
+    return re.search(r"code is: (\d{6})", body).group(1)
 
 
-async def sign_in(client: Client, email: str) -> None:
-    result = await client.call_tool("authenticate", {"email": email})
-    assert "Signed in" in result.content[0].text
+class Flow:
+    """The OAuth dance against the real front door, the way Claude runs it."""
+
+    def __init__(self):
+        self.web = httpx.Client(
+            base_url=f"http://{DOMAIN}", follow_redirects=False, timeout=10
+        )
+        self.verifier = secrets.token_urlsafe(43)
+        digest = hashlib.sha256(self.verifier.encode()).digest()
+        self.challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+        self.state = secrets.token_urlsafe(8)
+        self.client_id: str | None = None
+        self.txn: str | None = None
+
+    def register(self) -> str:
+        response = self.web.post(
+            "/register",
+            json={
+                "redirect_uris": [CALLBACK],
+                "token_endpoint_auth_method": "none",
+                "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"],
+                "client_name": "smoke",
+            },
+        )
+        assert response.status_code == 201, response.text
+        self.client_id = response.json()["client_id"]
+        return self.client_id
+
+    def authorize(self) -> str:
+        if self.client_id is None:
+            self.register()
+        response = self.web.get(
+            "/authorize",
+            params={
+                "response_type": "code",
+                "client_id": self.client_id,
+                "redirect_uri": CALLBACK,
+                "state": self.state,
+                "code_challenge": self.challenge,
+                "code_challenge_method": "S256",
+            },
+        )
+        assert response.status_code == 302, response.text
+        location = response.headers["location"]
+        self.txn = parse_qs(urlparse(location).query)["txn"][0]
+        return self.txn
+
+    def submit_email(self, email: str) -> httpx.Response:
+        return self.web.post("/verify/email", data={"txn": self.txn, "email": email})
+
+    def submit_code(self, code: str) -> httpx.Response:
+        return self.web.post("/verify/code", data={"txn": self.txn, "code": code})
+
+    def sign_in(self, email: str) -> str:
+        """The whole handshake; returns the access token."""
+        self.authorize()
+        assert self.submit_email(email).status_code == 303
+        response = self.submit_code(emailed_code(email))
+        assert response.status_code == 302, response.text
+        query = parse_qs(urlparse(response.headers["location"]).query)
+        assert query["state"] == [self.state]
+        response = self.web.post(
+            "/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": query["code"][0],
+                "redirect_uri": CALLBACK,
+                "client_id": self.client_id,
+                "code_verifier": self.verifier,
+            },
+        )
+        assert response.status_code == 200, response.text
+        return response.json()["access_token"]
+
+
+def chat(email: str) -> Client:
+    """One signed-in conversation against the real server."""
+    return Client(f"http://{DOMAIN}/mcp", auth=Flow().sign_in(email))
 
 
 async def wait_for_deployment(client: Client, slug: str) -> dict:
@@ -104,65 +180,53 @@ async def wait_for_deployment(client: Client, slug: str) -> dict:
 
 
 async def test_every_tool_is_published():
-    async with chat() as client:
+    async with chat(f"{unique('tools')}@example.com") as client:
         tools = {tool.name for tool in await client.list_tools()}
     assert tools == TOOLS
 
 
-async def test_signing_in_confirms_the_claude_accounts_email():
+def test_the_metadata_advertises_oauth_with_cimd():
+    """What claude.ai reads before offering "hosted client metadata"."""
+    metadata = json.loads(
+        _get(f"http://{DOMAIN}/.well-known/oauth-authorization-server")
+    )
+    assert metadata["client_id_metadata_document_supported"] is True
+    assert "none" in metadata["token_endpoint_auth_methods_supported"]
+
+    resource = json.loads(
+        _get(f"http://{DOMAIN}/.well-known/oauth-protected-resource/mcp")
+    )
+    assert resource["resource"] == f"http://{DOMAIN}/mcp"
+
+
+def test_signing_in_takes_a_real_emailed_code():
     email = f"{unique('signin')}@example.com"
-    async with chat() as client:
-        status = await client.call_tool("authentication_status")
-        assert "not signed in" in status.content[0].text
+    flow = Flow()
+    flow.authorize()
+    assert flow.submit_email(email).status_code == 303
 
-        result = await client.call_tool("authenticate", {"email": email})
-        assert "Signed in" in result.content[0].text
+    (message,) = mail_to(email)
+    assert message["sender"].startswith("<cervo@localhost>")
+    assert message["subject"] == "Your cervo verification code"
+    code = emailed_code(email)
 
-        status = await client.call_tool("authentication_status")
-        assert email in status.content[0].text
+    wrong = "000000" if code != "000000" else "111111"
+    response = flow.submit_code(wrong)
+    assert "attempts left" in response.text
 
-
-async def test_a_client_that_is_not_claude_cannot_sign_in():
-    stranger = Implementation(name="some-other-agent", version="1.0")
-    async with chat(client_info=stranger) as client:
-        with pytest.raises(ToolError, match="only works through Claude"):
-            await client.call_tool(
-                "authenticate", {"email": f"{unique('stranger')}@example.com"}
-            )
+    response = flow.submit_code(code)
+    assert response.status_code == 302
+    assert response.headers["location"].startswith(CALLBACK)
 
 
-async def test_a_sign_in_does_not_leak_into_other_conversations():
-    email = f"{unique('private')}@example.com"
-    async with chat() as client:
-        await sign_in(client, email)
-
-    async with chat() as fresh:
-        status = await fresh.call_tool("authentication_status")
-        assert "not signed in" in status.content[0].text
-
-
-async def test_declining_the_confirmation_leaves_the_chat_signed_out():
-    email = f"{unique('declined')}@example.com"
-    async with chat(action="decline") as client:
-        with pytest.raises(ToolError, match="did not confirm"):
-            await client.call_tool("authenticate", {"email": email})
-        status = await client.call_tool("authentication_status")
-        assert "not signed in" in status.content[0].text
-
-
-async def test_site_tools_demand_a_signed_in_chat():
-    async with chat() as client:
-        with pytest.raises(ToolError, match="not authenticated"):
-            await client.call_tool("create_website", {"slug": unique("nope")})
-        with pytest.raises(ToolError, match="not authenticated"):
-            await client.call_tool("list_websites")
-        with pytest.raises(ToolError, match="not authenticated"):
-            await client.call_tool("delete_website", {"slug": unique("nope")})
+def test_the_mcp_endpoint_demands_a_token():
+    response = httpx.post(f"http://{DOMAIN}/mcp", json={}, timeout=10)
+    assert response.status_code == 401
+    assert "resource_metadata" in response.headers["www-authenticate"]
 
 
 async def test_bad_slugs_are_rejected():
-    async with chat() as client:
-        await sign_in(client, f"{unique('slugs')}@example.com")
+    async with chat(f"{unique('slugs')}@example.com") as client:
         for slug in ("Not-Valid", "under_score", "-leading", ""):
             with pytest.raises(ToolError):
                 await client.call_tool("create_website", {"slug": slug})
@@ -173,9 +237,7 @@ async def test_bad_slugs_are_rejected():
 async def test_a_site_is_created_deployed_and_served():
     email = f"{unique('owner')}@example.com"
     slug = unique("smoke")
-    async with chat() as client:
-        await sign_in(client, email)
-
+    async with chat(email) as client:
         result = await client.call_tool("create_website", {"slug": slug})
         site = result.structured_content
         assert site["error"] is None
@@ -210,8 +272,7 @@ async def test_a_followed_creation_reports_progress_and_returns_live():
     async def on_progress(progress, total, message):
         updates.append((progress, total, message))
 
-    async with chat() as client:
-        await sign_in(client, email)
+    async with chat(email) as client:
         result = await client.call_tool(
             "create_website", {"slug": slug}, progress_handler=on_progress
         )
@@ -246,8 +307,7 @@ def test_unknown_paths_get_the_styled_404():
 
 async def test_the_homepage_catalogs_live_sites():
     slug = unique("public")
-    async with chat() as owner:
-        await sign_in(owner, f"{unique('owner')}@example.com")
+    async with chat(f"{unique('owner')}@example.com") as owner:
         await owner.call_tool("create_website", {"slug": slug})
         await wait_for_deployment(owner, slug)
 
@@ -258,12 +318,11 @@ async def test_the_homepage_catalogs_live_sites():
 
 async def test_the_progress_app_can_follow_a_deployment():
     slug = unique("watched")
-    async with chat() as owner:
-        await sign_in(owner, f"{unique('owner')}@example.com")
+    async with chat(f"{unique('owner')}@example.com") as owner:
         await owner.call_tool("create_website", {"slug": slug})
         await wait_for_deployment(owner, slug)
 
-    async with chat() as page:  # the app's poll needs no sign-in
+    async with chat(f"{unique('page')}@example.com") as page:
         result = await page.call_tool("website_status", {"slug": slug})
 
     site = json.loads(result.content[0].text)
@@ -273,24 +332,20 @@ async def test_the_progress_app_can_follow_a_deployment():
 
 async def test_a_slug_cannot_be_taken_from_its_owner():
     slug = unique("contested")
-    async with chat() as alice:
-        await sign_in(alice, f"{unique('alice')}@example.com")
+    async with chat(f"{unique('alice')}@example.com") as alice:
         await alice.call_tool("create_website", {"slug": slug})
 
-    async with chat() as bob:
-        await sign_in(bob, f"{unique('bob')}@example.com")
+    async with chat(f"{unique('bob')}@example.com") as bob:
         with pytest.raises(ToolError, match="already taken"):
             await bob.call_tool("create_website", {"slug": slug})
 
 
 async def test_each_owner_sees_only_their_own_sites():
     mine, theirs = unique("mine"), unique("theirs")
-    async with chat() as alice:
-        await sign_in(alice, f"{unique('alice')}@example.com")
+    async with chat(f"{unique('alice')}@example.com") as alice:
         await alice.call_tool("create_website", {"slug": mine})
 
-    async with chat() as bob:
-        await sign_in(bob, f"{unique('bob')}@example.com")
+    async with chat(f"{unique('bob')}@example.com") as bob:
         await bob.call_tool("create_website", {"slug": theirs})
         result = await bob.call_tool("list_websites")
 
@@ -301,8 +356,7 @@ async def test_each_owner_sees_only_their_own_sites():
 
 async def test_a_deleted_site_stops_being_served():
     slug = unique("gone")
-    async with chat() as client:
-        await sign_in(client, f"{unique('owner')}@example.com")
+    async with chat(f"{unique('owner')}@example.com") as client:
         await client.call_tool("create_website", {"slug": slug})
         await wait_for_deployment(client, slug)
 

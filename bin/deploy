@@ -28,6 +28,11 @@ hub_user="$(var dockerhub_user)"
 hub_token="$(var op_dockerhub_token)"
 sha="$(git rev-parse --short HEAD)"
 
+# Both secrets are read here, up front — the playbook never invokes op, so
+# a 1Password re-authorization can only ever interrupt the start of a run.
+smtp_password="$(op read "$(var op_smtp_password)")"
+export CERVO_SMTP_PASSWORD="$smtp_password"
+
 docker build --platform linux/amd64 -t "$repo:$sha" -t "$repo:latest" .
 op read "$hub_token" | docker login -u "$hub_user" --password-stdin
 docker push "$repo:$sha"

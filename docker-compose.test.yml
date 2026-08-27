@@ -4,39 +4,46 @@ services:
   tests:
     build: .
     command: pytest
-    environment:
-      DOMAIN: caddy
+  # OAuth issuer URLs must be https or localhost, so the test stack keeps the
+  # default DOMAIN=localhost and the smoke runner shares caddy's network
+  # namespace: http://localhost reaches the front door, and the other
+  # services (app, mail) still resolve by name through that namespace.
   smoke:
     build: .
     command: pytest -v tests/smoke.py
-    environment:
-      DOMAIN: caddy
+    network_mode: service:caddy
     depends_on:
       - app
   app:
     build: .
     restart: unless-stopped
-    environment:
-      DOMAIN: caddy
     volumes:
       - data:/mnt/data
     depends_on:
       - worker
       - caddy
+      - mail
   worker:
     build: .
     command: cervo-worker
     restart: unless-stopped
-    environment:
-      DOMAIN: caddy
     volumes:
       - data:/mnt/data
+  # Seeding a stub Caddyfile keeps caddy from crash-looping on the fresh
+  # volume: the smoke runner joins this container's network namespace, and a
+  # restart while it joins kills the run. The worker's startup heal replaces
+  # the stub through the admin API moments later.
   caddy:
     image: caddy:latest
-    command: caddy run --config /mnt/data/Caddyfile --adapter caddyfile
+    command: >
+      sh -c "test -f /mnt/data/Caddyfile
+      || printf '{\n\tadmin 0.0.0.0:2019\n}\n:80\n' > /mnt/data/Caddyfile;
+      exec caddy run --config /mnt/data/Caddyfile --adapter caddyfile"
     restart: unless-stopped
     volumes:
       - data:/mnt/data
+  mail:
+    image: schickling/mailcatcher:latest
 
 volumes:
   data:

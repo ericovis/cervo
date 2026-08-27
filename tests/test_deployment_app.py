@@ -5,7 +5,7 @@ import json
 import pytest
 from fastmcp.exceptions import ToolError
 
-from tests.conftest import call, chat, deploy, sign_in
+from tests.conftest import call, chat, deploy
 
 DEPLOYMENT_URI = "ui://cervo/deployment.html"
 
@@ -26,11 +26,10 @@ async def test_website_status_is_only_for_the_app():
 
 async def test_the_app_can_follow_a_deployment():
     async with chat() as c:
-        await sign_in(c)
         await call(c, "create_website", slug="watched")
 
-    # The app polls from the same conversation, but the tool itself does not
-    # care: a fresh unauthenticated chat models the weakest caller.
+    # The app polls from within the same connector session; any signed-in
+    # conversation can read a deployment's public status.
     async with chat() as page:
         before = json.loads(await call(page, "website_status", slug="watched"))
         deploy()

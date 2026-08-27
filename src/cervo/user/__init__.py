@@ -4,7 +4,7 @@
 ruff's TID251 rule enforces it. Callers go through the service.
 """
 
-from cervo.user.service import by_email, create_tables, ensure
+from cervo.user.service import by_email, by_id, create_tables, ensure
 from cervo.user.types import User
 
-__all__ = ["User", "by_email", "create_tables", "ensure"]
+__all__ = ["User", "by_email", "by_id", "create_tables", "ensure"]

@@ -49,11 +49,11 @@ def privacy_page() -> HTMLResponse:
         layout.section(
             "WHAT IS STORED",
             P(
-                "Your email address — the one on your Claude account — "
-                "which identifies your sign-ins and owns your sites. A "
-                "record of each signed-in chat, which expires within "
-                "hours. And the sites you deploy — their files are, by "
-                "design, published to the public internet."
+                "Your email address, verified when you connect, which owns "
+                "your sites. Sign-in codes and the tokens your Claude "
+                "connection holds are stored only as hashes. And the sites "
+                "you deploy — their files are, by design, published to the "
+                "public internet."
             ),
         ),
         layout.section(
@@ -61,8 +61,8 @@ def privacy_page() -> HTMLResponse:
             P(
                 "No analytics, no tracking, no cookies. The only thing "
                 "kept in your browser is your theme preference, stored "
-                "locally and never sent anywhere. Cervo never emails you, "
-                "and your email address is not shared."
+                "locally and never sent anywhere. Cervo emails you nothing "
+                "but sign-in codes, and your address is not shared."
             ),
         ),
     )

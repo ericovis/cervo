@@ -1,22 +1,33 @@
-"""Shapes for authentication.
+"""Shapes for the OAuth authorization server.
 
-Cervo is used through Claude, and Claude already knows who the user is — so
-signing in is the user confirming the email address on their Claude account.
-Once confirmed, the chat carries a session that stands in for the email until
-it expires.
+Cervo is its own authorization server: connecting the claude.ai connector
+runs a browser flow where the user proves control of an email address, and
+every MCP request afterwards carries a Bearer token minted here. A
+:class:`Transaction` is one in-flight authorize request — everything from the
+``/authorize`` query string that the verification pages and the final
+redirect need, plus the state of the email challenge.
 """
 
-from datetime import UTC, datetime
+import time
 
 from pydantic import BaseModel, EmailStr
 
 
-class AuthSession(BaseModel):
-    """A chat whose user confirmed ``email``, until ``expires_at``."""
+class Transaction(BaseModel):
+    """One authorize request, parked while the user verifies their email."""
 
-    session_id: str
-    email: EmailStr
-    expires_at: datetime
+    txn_id: str
+    client_id: str
+    redirect_uri: str
+    redirect_uri_provided_explicitly: bool
+    state: str | None = None
+    scopes: list[str] = []
+    code_challenge: str
+    resource: str | None = None
+    email: EmailStr | None = None
+    code_hash: str | None = None
+    attempts: int = 0
+    expires_at: float
 
     def is_expired(self) -> bool:
-        return datetime.now(UTC) >= self.expires_at
+        return time.time() >= self.expires_at

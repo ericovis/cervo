@@ -30,17 +30,16 @@ def docs_page() -> HTMLResponse:
         layout.section(
             "GETTING STARTED",
             P(
-                "Connect Claude — Claude Code, the Claude apps, or "
-                "claude.ai; cervo works only with Claude — to cervo's "
-                "server:"
+                "Add cervo as a connector in Claude — with authentication "
+                "required — pointing at cervo's MCP server:"
             ),
             layout.endpoint_chip(f"{config.origin()}/mcp"),
             P(
-                "Ask it to authenticate with cervo. Claude offers the email "
-                "address on your Claude account and you confirm it — that "
-                "is the whole sign-in. The confirmed address owns "
-                "everything you create, and the chat stays signed in for "
-                "four hours."
+                "Connecting opens cervo's sign-in page in your browser: "
+                "enter your email, type back the six-digit code that lands "
+                "in your inbox, and you are done. The verified address owns "
+                "everything you create, and the connection stays signed in "
+                "on its own — no codes in the chat, ever."
             ),
             P(
                 "Then ask for a website. A site's name is its slug — "
@@ -48,7 +47,6 @@ def docs_page() -> HTMLResponse:
                 "address:"
             ),
             layout.prompts(
-                "Authenticate with cervo",
                 "Create a website called my-cool-site",
             ),
             P(

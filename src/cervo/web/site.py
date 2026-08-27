@@ -38,7 +38,6 @@ def default_page(slug: str, url: str, deployed_at: str) -> str:
             layout.endpoint_chip(f"{base}/mcp"),
             P("Then just ask. Try prompts like:"),
             layout.prompts(
-                "Authenticate with cervo",
                 f"Upload my files to {host}",
                 f"Design my {host} website",
             ),

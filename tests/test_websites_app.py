@@ -2,7 +2,7 @@
 
 import json
 
-from tests.conftest import call, chat, deploy, sign_in
+from tests.conftest import call, chat, deploy
 
 WEBSITES_URI = "ui://cervo/websites.html"
 
@@ -17,7 +17,6 @@ async def test_list_websites_declares_the_overview_ui():
 async def test_the_result_is_one_text_block_the_page_can_parse():
     """The UI reads the first text content block as the whole JSON list."""
     async with chat() as c:
-        await sign_in(c)
         await call(c, "create_website", slug="one")
         deploy()
         await call(c, "create_website", slug="two")

@@ -32,4 +32,8 @@ def origin(host: str | None = None) -> str:
     return f"{SCHEME}://{host or DOMAIN}"
 
 
-AUTH_SESSION_TTL = config("AUTH_SESSION_TTL", default=4 * 60 * 60, cast=int)
+EMAIL_HOST = config("EMAIL_HOST", default="mail")
+EMAIL_PORT = config("EMAIL_PORT", default=1025, cast=int)
+EMAIL_FROM = config("EMAIL_FROM", default="cervo@localhost")
+EMAIL_USER = config("EMAIL_USER", default="")  # set for a real SMTP provider:
+EMAIL_PASSWORD = config("EMAIL_PASSWORD", default="")  # enables STARTTLS+login

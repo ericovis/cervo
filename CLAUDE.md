@@ -1,6 +1,6 @@
 # Cervo
 
-A demo app for managing static website hosting on a shared VPS, built as an MCP server with [FastMCP](https://gofastmcp.com). Claude Code is the AI/chat interface used to exercise and test the server's tools during development. The whole environment — dev and production alike — runs from docker-compose: caddy is the front door and a worker process runs deployments.
+A demo app for managing static website hosting on a shared VPS, built as an MCP server with [FastMCP](https://gofastmcp.com). Claude Code is the AI/chat interface used to exercise and test the server's tools during development. The whole environment — dev and production alike — runs from docker-compose: caddy is the front door, a worker process runs deployments, and mailcatcher stands in for SMTP in development.
 
 ## Running
 
@@ -10,11 +10,12 @@ Prerequisite: [Docker](https://www.docker.com/) (with Compose). [uv](https://doc
 bin/dev    # docker compose up -d — the whole environment
 ```
 
-The stack is three services, all sharing the `.data` volume at `/mnt/data`:
+The stack is four services, all sharing the `.data` volume at `/mnt/data`:
 
 - `app` — the MCP server and the public website, one process. Publishes no port; caddy reverse-proxies it at `http://localhost` — the homepage (with docs at `/docs`) — and the MCP endpoint stays `http://localhost/mcp`.
 - `worker` — the job worker (`cervo-worker`). Boots first, creates the database tables, and renders the initial Caddyfile.
 - `caddy` — the front door on ports 80/443. Runs on the generated `/mnt/data/Caddyfile` and serves the sites at `http://{slug}.localhost`. Its unauthenticated admin API (`caddy:2019`) is reachable only on the compose network. On a fresh checkout it restarts until the worker first renders the Caddyfile — that's the `restart: unless-stopped` doing its job, not a bug.
+- `mail` — mailcatcher (SMTP on 1025, web UI at http://localhost:1080). Development mail — the sign-in codes — goes here, not to real SMTP.
 
 `./src` (and `./tests`) are bind-mounted into `app` and `worker`, so after changing code run `docker compose restart app` (or `worker`) — no rebuild needed. Rebuild (`docker compose build`) only when dependencies change.
 
@@ -34,15 +35,19 @@ What actually varies between environments is read from the environment / `.env` 
 | `DOMAIN` | `localhost` | cervo is served at `{SCHEME}://{DOMAIN}`, sites at `{SCHEME}://{slug}.{DOMAIN}` |
 | `SCHEME` | `http` | `https` in production: caddy then gets a certificate per hostname (persisted in its `/data` volume) and redirects plain http |
 | `ACME_EMAIL` | *(empty)* | contact caddy registers with Let's Encrypt |
-| `AUTH_SESSION_TTL` | `14400` | seconds a chat stays signed in (4 hours) |
+| `EMAIL_HOST` / `EMAIL_PORT` | `mail` / `1025` | SMTP (the mailcatcher service in dev) |
+| `EMAIL_FROM` | `cervo@localhost` | From address on outgoing mail |
+| `EMAIL_USER` / `EMAIL_PASSWORD` | *(empty)* | set for a real SMTP provider — switches `mail.send` to STARTTLS + login (port 587 shape) |
+
+Auth has no knobs: token and code lifetimes are private constants in
+`cervo.auth.service`, identical everywhere by design.
 
 ## Layout
 
-- `src/cervo/server.py` — the FastMCP instance (`app`) and all tool definitions.
-  `authenticate` is Claude-only (the client must introduce itself as Claude in
-  the MCP handshake) and takes the email on the user's Claude account: MCP
-  elicitation has the human confirm the address, and confirming it is the whole
-  sign-in — no code is emailed, so a client that cannot elicit cannot sign in.
+- `src/cervo/server.py` — the FastMCP instance (`app`, constructed with
+  `auth=CervoOAuthProvider()`) and all tool definitions. There is no sign-in
+  tool: every MCP request carries a Bearer token or is refused with a 401 at
+  the transport, and tools resolve the owner from the token (`_owner`).
 - `src/cervo/web/` — the public website: pages built from FastHTML fasttags on
   the design system (`design-system/`), registered on the FastMCP app as custom
   HTTP routes (`web.register(app)` at the bottom of server.py). FastMCP appends
@@ -58,6 +63,7 @@ What actually varies between environments is read from the environment / `.env` 
 - `src/cervo/schema.py` — `create_tables()`, the one place that knows every table
 - `src/cervo/db.py` — `connect()`, the connection context manager
 - `src/cervo/errors.py` — `AppError`, the base for failures the user should read
+- `src/cervo/mail.py` — sending mail over SMTP (the sign-in codes)
 - `src/cervo/caddy.py` — rendering the Caddyfile from the database and reloading
   caddy over its admin API
 - `src/cervo/templates/` — jinja2 templates: the Caddyfile and the MCP app
@@ -108,6 +114,25 @@ so one person can own many.
 `job` is generic on purpose: a row is a `kind` plus a JSON `payload`, so future
 background work reuses the same queue, retry, and timeout machinery. Timestamps
 and payload serialization never leave its `_dao`.
+
+## Authentication
+
+Cervo is its own OAuth 2.1 authorization server; connecting it as a claude.ai
+custom connector (authentication: required) is the only sign-in. FastMCP
+mounts the endpoints (`/.well-known/*`, `/authorize`, `/token`, `/register`,
+`/revoke`) from `auth/provider.py`'s `CervoOAuthProvider`; the metadata is
+rebuilt there to advertise CIMD, so Claude's "hosted client metadata"
+(client_id = an Anthropic-hosted URL) works as well as plain DCR.
+
+`/authorize` parks the request as a transaction and redirects the browser to
+`/verify` (`web/verify.py`): the user enters an email, a six-digit code is
+mailed, and typing it back ends with a redirect to Claude's callback carrying
+a single-use authorization code. `/token` (PKCE-verified by the SDK)
+exchanges it for an access token (1 h) plus a rotating refresh token — both
+stored hashed, keyed to the `user` row the verified email resolved to. Tools
+read the identity per request via `get_access_token()`: the subject is the
+user id, the email a claim. Nothing about auth is per-conversation anymore —
+a connector stays signed in as long as Claude keeps refreshing.
 
 ## Jobs and deployment
 
@@ -172,13 +197,16 @@ collide.
 `tests/smoke.py` holds the end-to-end checks, run by their own `smoke`
 service — `depends_on` pulls up the stack they exercise. From inside the test
 network they cover the whole surface through real clients: every tool listed,
-sign-in by confirming the Claude account's email (non-Claude clients refused,
-declining leaves the chat signed out), sessions not leaking across
-conversations, slug validation and ownership rules, and a site created,
-polled to `live`, and its page actually fetched through caddy. The file is intentionally named
-so a plain `pytest` run skips it (it needs the stack up); in the test stack
-`DOMAIN` is set to `caddy`, so the front door is `http://caddy` and sites are
-fetched with a Host header.
+OAuth metadata advertising CIMD, the whole browser sign-in with the code read
+from mailcatcher's API, the MCP endpoint refusing tokenless requests, slug
+validation and ownership rules, and a site created, polled to `live`, and its
+page actually fetched through caddy. OAuth issuers must be https or
+localhost, so the test stack keeps `DOMAIN=localhost` and the smoke runner
+joins caddy's network namespace (`network_mode: service:caddy`) — and caddy
+is seeded with a stub Caddyfile there so it never crash-loops under the
+runner's feet. The file is intentionally named
+so a plain `pytest` run skips it (it needs the stack up); sites are
+fetched through the front door with a Host header.
 
 The unit suite is hermetic on top of the stack isolation (see below), so
 `uv run pytest` on the host works too — CI (`.github/workflows/test.yml`)
@@ -187,15 +215,19 @@ every pull request.
 
 Tests never touch development data or services: autouse fixtures in
 `tests/conftest.py` repoint `config.DATA_DIR` and `config.DATABASE_PATH` at a
-per-test `tmp_path` (creating the tables there) and replace `caddy.reload`
-with a capture list. Both are autouse — a test cannot escape them by
-forgetting a fixture — and `tests/test_isolation.py` asserts the guarantees
-hold.
+per-test `tmp_path` (creating the tables there), replace `mail.send` with a
+capture list, and replace `caddy.reload` the same way. All three are autouse —
+a test cannot escape them by forgetting a fixture — and
+`tests/test_isolation.py` asserts the guarantees hold.
 
-Write tests against the MCP tools rather than the services: `chat()` returns a
-client whose connection is one conversation (its own session id, so its own
-sign-in) that introduces itself as Claude, with a scripted human answering the
-elicitation, and `sign_in()` authenticates it. The website's pages are tested
+Write tests against the MCP tools rather than the services. Auth lives in
+the HTTP layer, so the suite runs MCP **over the ASGI app**: `chat(email)`
+signs in through the real OAuth flow (`Flow` in `tests/conftest.py` — DCR,
+authorize, verify pages with the code read from the `mailbox` fixture, PKCE
+token exchange) and yields a client whose requests carry the Bearer token; an
+in-process client would silently skip auth, so nothing uses one. `serving()`
+yields a plain HTTP client against the same app for probing the OAuth
+endpoints themselves (`tests/test_auth.py`). The website's pages are tested
 through a starlette `TestClient` over `app.http_app()` (`tests/test_web.py`).
 The worker never runs as a process in tests — call `worker.run_once()` (or the
 `deploy()` helper) for deterministic deployments.
@@ -211,8 +243,9 @@ tools are available directly in the chat — the primary way to test is to just 
 them and check the results.
 
 - The stack must already be running (`docker compose up -d`) **before starting the Claude Code session** — Claude Code connects to MCP servers at session startup. If tool calls fail to connect, check `docker compose ps` (on a fresh checkout, give the worker a moment to render the Caddyfile so caddy stays up), then run `/mcp` to connect.
+- Connecting requires OAuth: `/mcp` opens the browser on cervo's sign-in page. Enter any address and read the six-digit code from mailcatcher at http://localhost:1080 — no real mail is sent in development. The connection then stays signed in across restarts of the stack (tokens live in the database volume).
 - Claude Code never reconnects automatically: whenever you change the MCP server code, `docker compose restart app` and run `/mcp` to reconnect. This is mandatory when tool schemas change (names, parameters, docstrings), since tool definitions are cached from the initial handshake; if only a tool's body changed, restarting the service is enough — the next call reaches the fresh process as long as the schema still matches. Worker-side changes (deployments) need only `docker compose restart worker`.
-- For checks the MCP connection can't cover (error cases, raw protocol), use a throwaway `fastmcp.Client` script:
+- For checks the MCP connection can't cover (error cases, raw protocol), use a throwaway `fastmcp.Client` script — pass `auth="oauth"` to run the same browser sign-in, or drive the flow by hand the way `tests/smoke.py` does:
 
 ```python
 import asyncio
@@ -220,7 +253,7 @@ from fastmcp import Client
 
 
 async def main():
-    async with Client("http://localhost/mcp") as client:
+    async with Client("http://localhost/mcp", auth="oauth") as client:
         print(await client.list_tools())
 
 

@@ -27,11 +27,11 @@ def home_page() -> HTMLResponse:
             P("Point your AI tool of choice at cervo's MCP server:"),
             layout.endpoint_chip(mcp_url),
             P(
-                "Signing in is one confirmation — the email on your Claude "
-                "account owns the site. Then just ask:"
+                "Signing in happens when you connect: your browser opens "
+                "cervo's sign-in page, and the email you verify there owns "
+                "your sites. Then just ask:"
             ),
             layout.prompts(
-                "Authenticate with cervo",
                 "Create a website called my-cool-site",
                 f"Upload my files to my-cool-site.{config.DOMAIN}",
             ),

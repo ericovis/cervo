@@ -9,7 +9,7 @@ import asyncio
 
 from cervo import caddy, server, user, website, worker
 from cervo.db import connect
-from tests.conftest import OWNER, call, chat, deploy, sign_in
+from tests.conftest import OWNER, call, chat, deploy
 
 
 def created(slug: str, email: str = OWNER) -> website.Website:
@@ -178,7 +178,6 @@ async def test_a_followed_creation_streams_progress(monkeypatch):
             await asyncio.to_thread(worker.run_once)
 
     async with chat() as c:
-        await sign_in(c)
         pumping = asyncio.create_task(pump())
         try:
             result = await c.call_tool(
@@ -199,14 +198,12 @@ async def test_a_followed_creation_streams_progress(monkeypatch):
 async def test_a_creation_that_outlasts_the_follow_window_hands_off():
     """The tool never waits past its window: the site comes back pending."""
     async with chat() as c:  # conftest pins the window to zero
-        await sign_in(c)
         result = await c.call_tool("create_website", {"slug": "unwatched"})
     assert result.structured_content["status"] == "pending"
 
 
 async def test_an_agent_watches_a_site_go_live():
     async with chat() as c:
-        await sign_in(c)
         await call(c, "create_website", slug="watched")
 
         deploy()  # the worker service, doing its thing

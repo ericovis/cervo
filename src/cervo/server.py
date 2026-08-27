@@ -1,18 +1,22 @@
 import asyncio
+import sqlite3
 from time import monotonic
 
 from fastmcp import Context, FastMCP
 from fastmcp.apps import AppConfig, ResourceCSP
 from fastmcp.exceptions import ToolError
+from fastmcp.server.dependencies import get_access_token
 from jinja2 import Environment, PackageLoader
-from mcp.types import ClientCapabilities, ElicitationCapability
-from pydantic import BaseModel, EmailStr, Field, create_model
 
 from cervo import auth, user, web, website
 from cervo.db import connect
 from cervo.errors import AppError
 
-app = FastMCP("cervo")
+# Bearer tokens on every MCP request: the provider mounts the OAuth
+# endpoints (/.well-known metadata, /authorize, /token, /register, /revoke)
+# and unauthenticated calls to /mcp are refused with a 401 before any tool
+# runs. Signing in happens in the browser when the connector is added.
+app = FastMCP("cervo", auth=auth.CervoOAuthProvider())
 
 _env = Environment(loader=PackageLoader("cervo"), autoescape=True)
 
@@ -30,118 +34,27 @@ _WEBSITES_URI = "ui://cervo/websites.html"
 _FOLLOW_POLL = 0.5  # seconds
 _FOLLOW_FOR = 30  # seconds
 
-_CLAUDE_ONLY = (
-    "cervo only works through Claude. Connect from a Claude client — Claude "
-    "Code, the Claude apps, or claude.ai — to sign in."
-)
-
-_ELICITATION_REQUIRED = (
-    "This client cannot ask the user to confirm an email address, and cervo "
-    "will not sign in as an unconfirmed one. Use a client that supports "
-    "MCP elicitation."
+_NOT_AUTHENTICATED = (
+    "This request carries no valid cervo sign-in. Ask the user to reconnect "
+    "the cervo connector — signing in happens in the browser when it is "
+    "added — and then try again."
 )
 
 
-def _is_claude(ctx: Context) -> bool:
-    """Whether the connected client introduced itself as Claude.
+def _owner(conn: sqlite3.Connection) -> user.User:
+    """The user behind this request's Bearer token.
 
-    The client's name arrives in the MCP initialize handshake; cervo serves
-    Claude only, where the account's email address is at hand.
+    The transport already refused requests without a valid token, so this is
+    a lookup, not a check — the guard remains only for the token outliving
+    its account.
     """
-    params = ctx.session.client_params
-    return params is not None and "claude" in params.clientInfo.name.lower()
-
-
-def _confirmation_model(proposed: str) -> type[BaseModel]:
-    """A one-field form pre-filled with the address the caller proposed.
-
-    Built per call so the client can render the proposal as an editable
-    default rather than an empty box.
-    """
-    return create_model(
-        "ConfirmEmail",
-        email=(
-            EmailStr,
-            Field(
-                default=proposed,
-                title="Email",
-                description="The address that owns your sites.",
-            ),
-        ),
-    )
-
-
-def _remaining(session: auth.AuthSession) -> str:
-    """A human phrase for how much longer a session lasts."""
-    minutes = auth.minutes_until(session.expires_at)
-    if minutes < 90:
-        return f"{minutes} minutes" if minutes != 1 else "1 minute"
-    hours = round(minutes / 60)
-    return f"{hours} hours" if hours != 1 else "1 hour"
-
-
-async def _confirm_email(ctx: Context, proposed: str) -> str:
-    """Ask the human to confirm or correct the address. Returns theirs."""
-    if not ctx.session.check_client_capability(
-        ClientCapabilities(elicitation=ElicitationCapability())
-    ):
-        raise ToolError(_ELICITATION_REQUIRED)
-
-    result = await ctx.elicit(
-        "Confirm the email address to sign in with — this address owns any "
-        "site you create.",
-        response_type=_confirmation_model(proposed),
-    )
-    if result.action != "accept":
-        raise ToolError(
-            "The user did not confirm an email address, so this chat is "
-            "still unauthenticated."
-        )
-    return result.data.email
-
-
-@app.tool
-async def authenticate(email: EmailStr, ctx: Context) -> str:
-    """Sign in with the email address on the user's Claude account.
-
-    Cervo only works through Claude, and the Claude account's email is the
-    identity: pass the address Claude knows the user by rather than
-    interrogating them first. The user is asked to confirm it — they may
-    correct it — and the chat is signed in the moment they do; there is no
-    code to wait for.
-
-    Calling this while already signed in just refreshes the session.
-    """
-    if not _is_claude(ctx):
-        raise ToolError(_CLAUDE_ONLY)
-
-    confirmed = await _confirm_email(ctx, email)
-
-    with connect() as conn:
-        session = auth.sign_in(conn, ctx.session_id, confirmed)
-
-    return (
-        f"Signed in as {session.email}. This chat stays signed in for "
-        f"{_remaining(session)}."
-    )
-
-
-@app.tool
-def authentication_status(ctx: Context) -> str:
-    """Report whether this chat is signed in, and as whom.
-
-    Use this to answer "am I signed in?" and to check before a run of work,
-    rather than triggering a needless confirmation dialog.
-    """
-    with connect() as conn:
-        session = auth.current(conn, ctx.session_id)
-
-    if session is None:
-        return (
-            "This chat is not signed in. Call authenticate with the email "
-            "address on the user's Claude account to start."
-        )
-    return f"Signed in as {session.email} for another {_remaining(session)}."
+    token = get_access_token()
+    if token is None or token.subject is None:
+        raise ToolError(_NOT_AUTHENTICATED)
+    owner = user.by_id(conn, int(token.subject))
+    if owner is None:
+        raise ToolError(_NOT_AUTHENTICATED)
+    return owner
 
 
 def _wants_progress(ctx: Context) -> bool:
@@ -192,11 +105,10 @@ async def _follow_deployment(ctx: Context, site: website.Website) -> website.Web
 
 @app.tool(app=AppConfig(resource_uri=_DEPLOYMENT_URI))
 async def create_website(slug: website.Slug, ctx: Context) -> website.Website:
-    """Create a static site owned by the signed-in user.
+    """Create a static site owned by the connected account.
 
-    Requires this chat to be signed in — the owner is taken from the session,
-    never from an argument. If it is not, or the session has expired, this
-    fails with instructions to call authenticate; do that and then retry.
+    The owner is the account that connected this cervo connector — it is
+    taken from the request's credentials, never from an argument.
 
     Creation queues a deployment that a worker runs step by step in the
     background. A call that asked for progress follows along — each step is
@@ -208,49 +120,43 @@ async def create_website(slug: website.Slug, ctx: Context) -> website.Website:
     """
     try:
         with connect() as conn:
-            session = auth.require(conn, ctx.session_id)
-            owner = user.ensure(conn, session.email)
-            site = website.create(conn, slug, owner)
+            site = website.create(conn, slug, _owner(conn))
     except AppError as error:
         raise ToolError(str(error)) from error
     return await _follow_deployment(ctx, site)
 
 
 @app.tool(app=AppConfig(resource_uri=_WEBSITES_URI))
-def list_websites(ctx: Context) -> list[website.Website]:
-    """List every site the signed-in user owns.
+def list_websites() -> list[website.Website]:
+    """List every site the connected account owns.
 
-    Requires this chat to be signed in. An empty list means they have not
-    created any yet, which is not an error. Each site carries its url and the
-    state of its deployment: status (pending, deploying, live, or failed)
-    and, when it failed, the error.
+    An empty list means they have not created any yet, which is not an
+    error. Each site carries its url and the state of its deployment:
+    status (pending, deploying, live, or failed) and, when it failed, the
+    error.
     """
     try:
         with connect() as conn:
-            session = auth.require(conn, ctx.session_id)
-            owner = user.ensure(conn, session.email)
-            return website.for_user(conn, owner)
+            return website.for_user(conn, _owner(conn))
     except AppError as error:
         raise ToolError(str(error)) from error
 
 
 @app.tool
-def delete_website(slug: website.Slug, ctx: Context) -> str:
-    """Delete a site the signed-in user owns.
+def delete_website(slug: website.Slug) -> str:
+    """Delete a site the connected account owns.
 
-    Requires this chat to be signed in, and the site must belong to the
-    signed-in user. Deletion is permanent — the site's files are removed
-    and its slug is freed for anyone to take — so only call this once the
-    user has clearly asked for this specific site to be deleted.
+    The site must belong to the connected account. Deletion is permanent —
+    the site's files are removed and its slug is freed for anyone to take —
+    so only call this once the user has clearly asked for this specific
+    site to be deleted.
 
     The site disappears from list_websites immediately; a background job
     then stops routing the subdomain and deletes the site's files.
     """
     try:
         with connect() as conn:
-            session = auth.require(conn, ctx.session_id)
-            owner = user.ensure(conn, session.email)
-            website.delete(conn, slug, owner)
+            website.delete(conn, slug, _owner(conn))
     except AppError as error:
         raise ToolError(str(error)) from error
     return (
@@ -264,7 +170,7 @@ def website_status(slug: website.Slug) -> website.Website:
     """Report a site's deployment state, for the progress UI.
 
     Only the deployment app calls this — it polls while the page is open.
-    Agents should use list_websites instead, which also proves ownership.
+    Agents should use list_websites instead, which also scopes to the owner.
     """
     with connect() as conn:
         site = website.get(conn, slug)

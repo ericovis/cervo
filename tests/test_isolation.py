@@ -1,12 +1,13 @@
 """The guarantees the rest of the suite leans on.
 
-Every test runs against a throwaway database and a fake caddy admin API. If
-these fail, treat results from the other files as suspect.
+Every test runs against a throwaway database, a fake mail server, and a fake
+caddy admin API. If these fail, treat results from the other files as
+suspect.
 """
 
-from cervo import caddy, config
+from cervo import caddy, config, mail
 from cervo.db import connect
-from tests.conftest import OWNER, call, chat
+from tests.conftest import OWNER, chat
 
 
 def test_the_database_is_a_throwaway(tmp_path):
@@ -33,6 +34,13 @@ def test_each_test_gets_an_empty_database_again():
         assert conn.execute("SELECT count(*) c FROM user").fetchone()["c"] == 0
 
 
+def test_smtp_is_never_reached(mailbox):
+    """`mail.send` is replaced, so nothing can open a socket to mailcatcher."""
+    assert mail.send.__name__ == "fake_send"
+    mail.send(to=OWNER, subject="probe", body="code is: 424242")
+    assert mailbox.last_code == "424242"
+
+
 def test_caddy_is_never_reached(caddy_reloads):
     """`caddy.reload` is replaced, so nothing can reach the admin API."""
     assert caddy.reload.__name__ == "fake_reload"
@@ -42,4 +50,5 @@ def test_caddy_is_never_reached(caddy_reloads):
 
 async def test_the_tables_exist_before_a_test_body_runs():
     async with chat() as c:
-        assert "not signed in" in await call(c, "authentication_status")
+        result = await c.call_tool("list_websites")
+        assert result.structured_content["result"] == []

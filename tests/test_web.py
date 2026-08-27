@@ -4,7 +4,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from cervo.server import app
-from tests.conftest import call, chat, deploy, sign_in
+from tests.conftest import call, chat, deploy
 
 PAGES = ["/", "/docs", "/terms", "/privacy"]
 
@@ -38,7 +38,6 @@ def test_the_catalog_starts_empty(client):
 
 async def test_the_catalog_lists_only_live_sites(client):
     async with chat() as c:
-        await sign_in(c)
         await call(c, "create_website", slug="ready")
         deploy()
         await call(c, "create_website", slug="waiting")
