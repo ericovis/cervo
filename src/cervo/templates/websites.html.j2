@@ -101,9 +101,15 @@
   const EVERY_MS = 1500;
   const AT_MOST = 40; // ~a minute, then the page stops asking
 
+  // FastMCP wraps non-object returns as {"result": ...} in structured
+  // content, and the host may hand the page either shape — unwrap it.
+  function unwrap(data) {
+    return data && !Array.isArray(data) && "result" in data ? data.result : data;
+  }
+
   function parse(result) {
     const text = result.content?.find((c) => c.type === "text");
-    return text ? JSON.parse(text.text) : null;
+    return text ? unwrap(JSON.parse(text.text)) : null;
   }
 
   async function follow(app, site) {
@@ -151,7 +157,7 @@
         note(text ? text.text : "list_websites did not return any sites.");
         return;
       }
-      render(app, JSON.parse(text.text));
+      render(app, unwrap(JSON.parse(text.text)));
     };
     await app.connect();
   } catch (e) {
