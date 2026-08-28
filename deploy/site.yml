@@ -94,6 +94,22 @@
         group: "1000"
         recurse: true
 
+    # A lost container network (a prune while debugging, a backend
+    # migration) leaves cervo-network.service "active" while podman knows
+    # nothing of it — and then no container can start. Recreate it before
+    # betting the restart on it.
+    - name: Check the container network still exists
+      ansible.builtin.command: podman network exists cervo
+      register: network_exists
+      changed_when: false
+      failed_when: network_exists.rc not in [0, 1]
+
+    - name: Recreate a lost container network
+      ansible.builtin.systemd_service:
+        name: cervo-network.service
+        state: restarted
+      when: network_exists.rc == 1
+
     # Worker first: its startup heal re-renders the Caddyfile from the
     # database with the freshly deployed template. Caddy after, so it reads
     # the new file even when the reload API was not up during the heal.
