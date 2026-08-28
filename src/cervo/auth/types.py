@@ -1,37 +1,33 @@
-"""Shapes for email-based authentication.
+"""Shapes for the OAuth authorization server.
 
-Confirming an email is the only way to prove who you are, so a challenge is
-issued per MCP session (one chat) and, once answered, becomes a session that
-stands in for the email until it expires.
+Cervo is its own authorization server: connecting the claude.ai connector
+runs a browser flow where the user proves control of an email address, and
+every MCP request afterwards carries a Bearer token minted here. A
+:class:`Transaction` is one in-flight authorize request — everything from the
+``/authorize`` query string that the verification pages and the final
+redirect need, plus the state of the email challenge.
 """
 
-from datetime import UTC, datetime
+import time
 
 from pydantic import BaseModel, EmailStr
 
 
-class _Expiring(BaseModel):
-    expires_at: datetime
+class Transaction(BaseModel):
+    """One authorize request, parked while the user verifies their email."""
+
+    txn_id: str
+    client_id: str
+    redirect_uri: str
+    redirect_uri_provided_explicitly: bool
+    state: str | None = None
+    scopes: list[str] = []
+    code_challenge: str
+    resource: str | None = None
+    email: EmailStr | None = None
+    code_hash: str | None = None
+    attempts: int = 0
+    expires_at: float
 
     def is_expired(self) -> bool:
-        return datetime.now(UTC) >= self.expires_at
-
-
-class AuthChallenge(_Expiring):
-    """A code mailed to an address, waiting to be pasted back.
-
-    The code itself is never stored — only its hash — so a leaked database
-    cannot be used to authenticate as somebody else.
-    """
-
-    session_id: str
-    email: EmailStr
-    code_hash: str
-    attempts: int = 0
-
-
-class AuthSession(_Expiring):
-    """A chat that has proven it controls ``email``, until ``expires_at``."""
-
-    session_id: str
-    email: EmailStr
+        return time.time() >= self.expires_at

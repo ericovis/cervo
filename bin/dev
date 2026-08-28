@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Start (or update) the dev environment.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+docker compose up -d --build --force-recreate "$@"

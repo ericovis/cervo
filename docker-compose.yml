@@ -1,9 +1,36 @@
 services:
-  sites:
+  app:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - .data:/mnt/data
+      - ./src:/app/src
+    depends_on:
+      - worker
+      - caddy
+      - mail
+  worker:
+    build: .
+    command: cervo-worker
+    restart: unless-stopped
+    volumes:
+      - .data:/mnt/data
+      - ./src:/app/src
+  caddy:
     image: caddy:latest
+    command: caddy run --config /mnt/data/Caddyfile --adapter caddyfile
+    restart: unless-stopped
+    # Unprivileged inside the container; the sysctl lets it still bind :80
+    # and :443. Its state goes to /tmp — development keeps no certificates.
+    user: "1000:1000"
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 80
+    environment:
+      XDG_DATA_HOME: /tmp/caddy
+      XDG_CONFIG_HOME: /tmp/caddy
     ports:
-      - 8080:80
-      - 8443:443
+      - 80:80
+      - 443:443
     volumes:
       - .data:/mnt/data
   mail:

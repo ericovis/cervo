@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>your websites — cervo</title>
+<style>
+{% include "_tokens.css" %}
+  /* ── base ── */
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 13px; line-height: 1.65;
+  }
+  main { max-width: 640px; margin: 0 auto; padding: 32px 24px 40px; }
+  a { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+  a:hover { color: var(--ink); }
+  /* ── header ── */
+  header { display: flex; justify-content: space-between; align-items: center; }
+  .wordmark { color: var(--ink); font-weight: 700; font-size: 12px; }
+  .tagline { color: var(--muted); font-size: 12px; }
+  /* ── hero ── */
+  .status { margin: 28px 0 0; font-size: 12px; letter-spacing: 0.12em; color: var(--accent); }
+  h1 { font-size: 26px; color: var(--ink); font-weight: 600; margin: 10px 0 14px; overflow-wrap: anywhere; }
+  .intro { margin: 0; color: var(--muted); max-width: 54ch; }
+  /* ── receipt ── */
+  .receipt { margin: 26px 0 0; display: flex; flex-direction: column; gap: 10px; }
+  .receipt > div { display: flex; align-items: baseline; gap: 10px; }
+  .receipt dt { color: var(--muted); overflow-wrap: anywhere; }
+  .receipt .leader { flex: 1; border-bottom: 1px dotted var(--dotted); min-width: 40px; }
+  .receipt dd { margin: 0; overflow-wrap: anywhere; }
+  .receipt dd.pending { color: var(--muted); }
+  .receipt .detail { display: block; margin: 2px 0 0; font-size: 12px; color: var(--muted); max-width: 56ch; }
+  .note { margin: 26px 0 0; color: var(--muted); }
+  @media (max-width: 480px) { h1 { font-size: 22px; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="wordmark">cervo</span>
+    <span class="tagline">static hosting</span>
+  </header>
+
+  <p class="status" id="status">&#9679; YOUR WEBSITES</p>
+  <h1 id="count">&hellip;</h1>
+  <p class="intro">Every site owned by the address this chat is signed in with.</p>
+
+  <dl class="receipt" id="sites"></dl>
+  <p class="note" id="note">loading&hellip;</p>
+</main>
+<script type="module">
+  // The MCP Apps bridge: the host pushes the list_websites result here, and
+  // unsettled deployments are followed through the website_status tool.
+  const el = (id) => document.getElementById(id);
+
+  function note(text) {
+    el("note").textContent = text;
+    el("note").hidden = !text;
+  }
+
+  function value(site) {
+    const dd = document.createElement("dd");
+    if (site.status === "live") {
+      const link = document.createElement("a");
+      link.href = site.url;
+      link.textContent = site.url;
+      link.target = "_blank";
+      link.rel = "noopener";
+      dd.append(link);
+    } else {
+      dd.className = "pending";
+      dd.textContent = site.status;
+      if (site.status === "failed" && site.error) {
+        const detail = document.createElement("span");
+        detail.className = "detail";
+        detail.textContent = site.error;
+        dd.append(detail);
+      }
+    }
+    return dd;
+  }
+
+  function row(site) {
+    const div = document.createElement("div");
+    div.id = `site-${site.slug}`;
+    const dt = document.createElement("dt");
+    dt.textContent = site.slug;
+    const leader = document.createElement("span");
+    leader.className = "leader";
+    div.append(dt, leader, value(site));
+    return div;
+  }
+
+  function update(site) {
+    const existing = el(`site-${site.slug}`);
+    if (existing) existing.replaceChildren(...row(site).children);
+  }
+
+  const EVERY_MS = 1500;
+  const AT_MOST = 40; // ~a minute, then the page stops asking
+
+  // FastMCP wraps non-object returns as {"result": ...} in structured
+  // content, and the host may hand the page either shape — unwrap it.
+  function unwrap(data) {
+    return data && !Array.isArray(data) && "result" in data ? data.result : data;
+  }
+
+  function parse(result) {
+    const text = result.content?.find((c) => c.type === "text");
+    return text ? unwrap(JSON.parse(text.text)) : null;
+  }
+
+  async function follow(app, site) {
+    const slug = site.slug;
+    for (let tick = 0; tick < AT_MOST; tick++) {
+      if (site) {
+        update(site);
+        if (site.status === "live" || site.status === "failed") return;
+      }
+      await new Promise((tickOver) => setTimeout(tickOver, EVERY_MS));
+      try {
+        site = parse(
+          await app.callServerTool({
+            name: "website_status",
+            arguments: { slug },
+          })
+        );
+      } catch (e) {} // a missed poll is not a failed deployment
+    }
+  }
+
+  function render(app, sites) {
+    el("count").textContent =
+      sites.length === 1 ? "1 website" : `${sites.length} websites`;
+    if (!sites.length) {
+      note("no sites yet — ask to create one.");
+      return;
+    }
+    note("");
+    el("sites").replaceChildren(...sites.map(row));
+    for (const site of sites) {
+      if (site.status !== "live" && site.status !== "failed") follow(app, site);
+    }
+  }
+
+  try {
+    const { App } = await import(
+      "https://unpkg.com/@modelcontextprotocol/ext-apps@0.4.0/app-with-deps"
+    );
+    const app = new App({ name: "cervo websites", version: "1.0.0" });
+    app.ontoolresult = ({ content, isError }) => {
+      const text = content?.find((c) => c.type === "text");
+      if (isError || !text) {
+        el("count").textContent = "not signed in";
+        note(text ? text.text : "list_websites did not return any sites.");
+        return;
+      }
+      render(app, unwrap(JSON.parse(text.text)));
+    };
+    await app.connect();
+  } catch (e) {
+    el("count").textContent = "offline";
+    note("this page shows your websites when run as an MCP app.");
+  }
+</script>
+</body>
+</html>

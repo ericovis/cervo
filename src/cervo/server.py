@@ -1,168 +1,347 @@
-from fastmcp import Context, FastMCP
-from fastmcp.exceptions import ToolError
-from mcp.types import ClientCapabilities, ElicitationCapability
-from pydantic import BaseModel, EmailStr, Field, create_model
+import asyncio
+import sqlite3
+from collections.abc import Callable
+from time import monotonic
+from typing import Annotated
 
-from cervo import auth, user, website
+from fastmcp import Context, FastMCP
+from fastmcp.apps import AppConfig, ResourceCSP
+from fastmcp.exceptions import ToolError
+from fastmcp.server.dependencies import get_access_token
+from jinja2 import Environment, PackageLoader
+from pydantic import Field
+
+from cervo import auth, db, monitoring, user, web, website
 from cervo.db import connect
 from cervo.errors import AppError
 
-app = FastMCP("cervo")
+# Bearer tokens on every MCP request: the provider mounts the OAuth
+# endpoints (/.well-known metadata, /authorize, /token, /register, /revoke)
+# and unauthenticated calls to /mcp are refused with a 401 before any tool
+# runs. Signing in happens in the browser when the connector is added.
+app = FastMCP("cervo", auth=auth.CervoOAuthProvider())
 
-_ELICITATION_REQUIRED = (
-    "This client cannot ask the user to confirm an email address, and cervo "
-    "will not mail a code to an unconfirmed one. Use a client that supports "
-    "MCP elicitation."
+# Unexpected failures inside MCP operations go to Honeybadger before FastMCP
+# masks them into protocol errors; deliberate refusals (ToolError) do not.
+app.add_middleware(monitoring.ReportMCPErrors())
+
+_env = Environment(loader=PackageLoader("cervo"), autoescape=True)
+
+# The deployment-progress app: clients that support MCP apps render this UI
+# for create_website's result, and it polls website_status until the site
+# settles. Clients that do not simply read the tool results as usual.
+_DEPLOYMENT_URI = "ui://cervo/deployment.html"
+
+# The websites-overview app: the same idea for list_websites — every site the
+# signed-in user owns, with unsettled deployments followed live.
+_WEBSITES_URI = "ui://cervo/websites.html"
+
+# Following a deployment from create_website: how often to look, and for how
+# long before handing off to list_websites (the deployment runs on either way).
+_FOLLOW_POLL = 0.5  # seconds
+_FOLLOW_FOR = 30  # seconds
+
+_NOT_AUTHENTICATED = (
+    "This request carries no valid cervo sign-in. Ask the user to reconnect "
+    "the cervo connector — signing in happens in the browser when it is "
+    "added — and then try again."
 )
 
 
-def _confirmation_model(proposed: str) -> type[BaseModel]:
-    """A one-field form pre-filled with the address the caller proposed.
+def _owner(conn: sqlite3.Connection) -> user.User:
+    """The user behind this request's Bearer token.
 
-    Built per call so the client can render the proposal as an editable
-    default rather than an empty box.
+    The transport already refused requests without a valid token, so this is
+    a lookup, not a check — the guard remains only for the token outliving
+    its account.
     """
-    return create_model(
-        "ConfirmEmail",
-        email=(
-            EmailStr,
-            Field(
-                default=proposed,
-                title="Email",
-                description="Where the confirmation code will be sent.",
-            ),
-        ),
+    token = get_access_token()
+    if token is None or token.subject is None:
+        raise ToolError(_NOT_AUTHENTICATED)
+    owner = user.by_id(conn, int(token.subject))
+    if owner is None:
+        raise ToolError(_NOT_AUTHENTICATED)
+    return owner
+
+
+def _wants_progress(ctx: Context) -> bool:
+    """Whether the client sent a progress token with this call."""
+    meta = ctx.request_context.meta if ctx.request_context else None
+    return meta is not None and meta.progressToken is not None
+
+
+def _chain_message(
+    state: website.Website | website.FileWrite | website.FileDeletion,
+    *,
+    success: str,
+    verb: str,
+    working: str,
+) -> str:
+    """One line saying where a background chain is, for a progress note.
+
+    The shared skeleton: its ``success`` message on the terminal-success
+    status (``live`` for a deployment, ``done`` for a file), a
+    ``"<verb> failed: …"`` on failure, a queued note while pending, or the
+    name of the step under way.
+    """
+    if state.status in ("live", "done"):
+        return success
+    if state.status == "failed":
+        return f"{verb} failed: {state.error}"
+    if state.status == "pending":
+        return "queued, waiting for a worker"
+    return state.step or working
+
+
+def _progress_message(site: website.Website) -> str:
+    return _chain_message(
+        site, success=f"live at {site.url}", verb="deployment", working="deploying"
     )
 
 
-def _remaining(session: auth.AuthSession) -> str:
-    """A human phrase for how much longer a session lasts."""
-    minutes = auth.minutes_until(session.expires_at)
-    if minutes < 90:
-        return f"{minutes} minutes" if minutes != 1 else "1 minute"
-    hours = round(minutes / 60)
-    return f"{hours} hours" if hours != 1 else "1 hour"
-
-
-async def _confirm_email(ctx: Context, proposed: str) -> str:
-    """Ask the human to confirm or correct the address. Returns theirs."""
-    if not ctx.session.check_client_capability(
-        ClientCapabilities(elicitation=ElicitationCapability())
-    ):
-        raise ToolError(_ELICITATION_REQUIRED)
-
-    result = await ctx.elicit(
-        "Confirm the email address to sign in with — the confirmation code "
-        "goes here, and this address owns any site you create.",
-        response_type=_confirmation_model(proposed),
+def _file_progress_message(state: website.FileWrite) -> str:
+    return _chain_message(
+        state, success=f"written to {state.url}", verb="write", working="working"
     )
-    if result.action != "accept":
-        raise ToolError(
-            "The user did not confirm an email address. Nothing was sent and "
-            "this chat is still unauthenticated."
-        )
-    return result.data.email
 
 
-@app.tool
-async def authenticate(email: EmailStr, ctx: Context) -> str:
-    """Sign in by confirming control of an email address.
+def _file_deletion_progress_message(state: website.FileDeletion) -> str:
+    return _chain_message(
+        state,
+        success=f"deleted {state.path} from the site",
+        verb="deletion",
+        working="working",
+    )
 
-    Confirming an email is the only way to prove identity here. The user is
-    asked to confirm the address before anything is sent — they may correct
-    it, so pass your best guess rather than interrogating them first. A
-    six-digit code is then emailed; ask the user to paste it back and call
-    confirm_authentication with it. Never guess or make up the code — only the
-    email contains it.
 
-    If this chat is already signed in as the same address, this is a no-op.
+async def _follow[S](
+    ctx: Context,
+    state: S,
+    refresh: Callable[[sqlite3.Connection, S], S],
+    message: Callable[[S], str],
+    terminal: tuple[str, ...],
+) -> S:
+    """Follow a chain of background work, reporting each step as progress.
+
+    Only when a progress token came with the call (most clients send one by
+    default) — without it the reports would vanish, so the tool returns
+    immediately and something else follows instead. Either way the worker
+    keeps going: this only watches, for at most ``_FOLLOW_FOR`` seconds,
+    then hands back whatever state the work is in.
     """
-    confirmed = await _confirm_email(ctx, email)
-
-    with connect() as conn:
-        session = auth.current(conn, ctx.session_id)
-        if session and session.email == confirmed:
-            return (
-                f"Already signed in as {session.email} for another "
-                f"{_remaining(session)}. No code was sent — just carry on."
+    if not _wants_progress(ctx):
+        return state
+    deadline = monotonic() + _FOLLOW_FOR
+    reported = None
+    while True:
+        seen = (state.steps_done, state.status)
+        if seen != reported:
+            reported = seen
+            await ctx.report_progress(
+                progress=state.steps_done,
+                total=state.steps_total or None,
+                message=message(state),
             )
+        if state.status in terminal or monotonic() >= deadline:
+            return state
+        await asyncio.sleep(_FOLLOW_POLL)
+        state = await db.transact(lambda conn, current=state: refresh(conn, current))
 
-        challenge = auth.start(conn, ctx.session_id, confirmed)
 
-    return (
-        f"A confirmation code was sent to {challenge.email}. Ask the user for "
-        f"it and call confirm_authentication. It expires in "
-        f"{auth.minutes_until(challenge.expires_at)} minutes."
-    )
+async def _follow_deployment(ctx: Context, site: website.Website) -> website.Website:
+    """Follow the deployment chain, reporting each step as progress."""
+
+    def refresh(conn: sqlite3.Connection, current: website.Website) -> website.Website:
+        return website.get(conn, current.slug) or current  # deleted mid-watch
+
+    return await _follow(ctx, site, refresh, _progress_message, ("live", "failed"))
+
+
+@app.tool(app=AppConfig(resource_uri=_DEPLOYMENT_URI))
+async def create_website(slug: website.Slug, ctx: Context) -> website.Website:
+    """Create a static site owned by the connected account.
+
+    The owner is the account that connected this cervo connector — it is
+    taken from the request's credentials, never from an argument.
+
+    Creation queues a deployment that a worker runs step by step in the
+    background. A call that asked for progress follows along — each step is
+    reported as it happens — and normally returns the site already "live" at
+    its url. Otherwise the site is returned as status "pending" right away;
+    check list_websites for progress. Report a "failed" status's error to
+    the user. Deployments retry on their own, but calling this again with
+    the slug of your own failed site queues a fresh deployment.
+    """
+    try:
+        site = await db.transact(lambda conn: website.create(conn, slug, _owner(conn)))
+    except AppError as error:
+        raise ToolError(str(error)) from error
+    return await _follow_deployment(ctx, site)
 
 
 @app.tool
-def confirm_authentication(code: str, ctx: Context) -> str:
-    """Finish signing in using the code that was emailed.
+async def write_file(
+    slug: website.Slug,
+    path: website.FilePath,
+    content: Annotated[str, Field(max_length=1_048_576)],
+    ctx: Context,
+) -> website.FileWrite:
+    """Write an HTML or CSS file into a site the connected account owns.
 
-    Pass the code exactly as the user gave it. Only call this once the user has
-    supplied a code — a wrong one counts against a limited number of attempts.
+    The file goes to ``path`` inside the site — a relative path like
+    "blog/post.html" or "css/main.css"; lowercase, no leading slash, no
+    "..". Subfolders are created as needed, and writing to an existing
+    path (index.html included) replaces that file. Only .html and .css
+    files up to 1 MiB are accepted; anything else is refused immediately.
+
+    The write runs in the background: the content is checked, then
+    written. A call that asked for progress follows along — each step is
+    reported as it happens — and normally returns the file already "done",
+    served at its url. Otherwise it returns status "pending" right away.
+    Report a "failed" status's error to the user: the content did not pass
+    validation, or the site was deleted meanwhile.
     """
-    # The connection closes before the error becomes a ToolError, so a refusal
-    # still commits what it recorded on the way (see cervo.errors.AppError).
+
+    def submit(conn: sqlite3.Connection) -> tuple[user.User, website.FileWrite]:
+        owner = _owner(conn)
+        return owner, website.submit_file(conn, slug, path, content, owner)
+
     try:
-        with connect() as conn:
-            session = auth.confirm(conn, ctx.session_id, code)
+        owner, state = await db.transact(submit)
     except AppError as error:
         raise ToolError(str(error)) from error
 
-    return (
-        f"Signed in as {session.email}. This chat stays signed in for "
-        f"{_remaining(session)}, so you will not need another code until then."
+    def refresh(
+        conn: sqlite3.Connection, current: website.FileWrite
+    ) -> website.FileWrite:
+        return website.file_state(conn, slug, path, content, owner.id) or current
+
+    return await _follow(
+        ctx, state, refresh, _file_progress_message, ("done", "failed")
     )
 
 
 @app.tool
-def authentication_status(ctx: Context) -> str:
-    """Report whether this chat is signed in, and as whom.
+async def delete_file(
+    slug: website.Slug,
+    path: website.FilePath,
+    ctx: Context,
+) -> website.FileDeletion:
+    """Delete a file from a site the connected account owns.
 
-    Use this to answer "am I signed in?" and to check before a run of work,
-    rather than triggering a needless code email.
+    The file at ``path`` — a relative path like "blog/post.html" — is
+    removed and stops being served. Deletion is permanent, though any page
+    can be written again with write_file; deleting index.html is allowed,
+    and the site's default landing page is put back in its place. Only call
+    this once the user has clearly asked for this specific file to be
+    deleted.
+
+    The deletion runs in the background. A call that asked for progress
+    follows along and normally returns the file already "done" — gone from
+    the site. Otherwise it returns status "pending" right away. Report a
+    "failed" status's error to the user: the site was deleted meanwhile.
+    """
+
+    def submit(conn: sqlite3.Connection) -> tuple[user.User, website.FileDeletion]:
+        owner = _owner(conn)
+        return owner, website.submit_file_deletion(conn, slug, path, owner)
+
+    try:
+        owner, state = await db.transact(submit)
+    except AppError as error:
+        raise ToolError(str(error)) from error
+
+    def refresh(
+        conn: sqlite3.Connection, current: website.FileDeletion
+    ) -> website.FileDeletion:
+        return website.file_deletion_state(conn, slug, path, owner.id) or current
+
+    return await _follow(
+        ctx, state, refresh, _file_deletion_progress_message, ("done", "failed")
+    )
+
+
+@app.tool(app=AppConfig(resource_uri=_WEBSITES_URI))
+def list_websites() -> list[website.Website]:
+    """List every site the connected account owns.
+
+    An empty list means they have not created any yet, which is not an
+    error. Each site carries its url and the state of its deployment:
+    status (pending, deploying, live, or failed) and, when it failed, the
+    error.
+    """
+    try:
+        with connect() as conn:
+            return website.for_user(conn, _owner(conn))
+    except AppError as error:
+        raise ToolError(str(error)) from error
+
+
+@app.tool
+def delete_website(slug: website.Slug) -> str:
+    """Delete a site the connected account owns.
+
+    The site must belong to the connected account. Deletion is permanent —
+    the site's files are removed and its slug is freed for anyone to take —
+    so only call this once the user has clearly asked for this specific
+    site to be deleted.
+
+    The site disappears from list_websites immediately; a background job
+    then stops routing the subdomain and deletes the site's files.
+    """
+    try:
+        with connect() as conn:
+            website.delete(conn, slug, _owner(conn))
+    except AppError as error:
+        raise ToolError(str(error)) from error
+    return (
+        f"The site {slug!r} was deleted. Its files and routing are being "
+        "removed in the background."
+    )
+
+
+@app.tool(app=AppConfig(visibility=["app"]))
+def website_status(slug: website.Slug) -> website.Website:
+    """Report a site's deployment state, for the progress UI.
+
+    Only the deployment app calls this — it polls while the page is open,
+    scoped to the connected account just as list_websites is. Agents should
+    use list_websites instead. A slug the account does not own reads the
+    same as one that does not exist, so this never reveals another owner's
+    site or its state.
     """
     with connect() as conn:
-        session = auth.current(conn, ctx.session_id)
-
-    if session is None:
-        return (
-            "This chat is not signed in. Call authenticate with the user's "
-            "email to start."
-        )
-    return f"Signed in as {session.email} for another {_remaining(session)}."
+        owner = _owner(conn)
+        site = website.get(conn, slug)
+    if site is None or site.user_id != owner.id:
+        raise ToolError(f"There is no site with the slug {slug!r}.")
+    return site
 
 
-@app.tool
-def create_website(slug: website.Slug, ctx: Context) -> website.Website:
-    """Create a static site owned by the signed-in user.
+@app.resource(
+    _DEPLOYMENT_URI,
+    app=AppConfig(csp=ResourceCSP(resource_domains=["https://unpkg.com"])),
+)
+def deployment_view() -> str:
+    """The deployment-progress UI, rendered on cervo's design system.
 
-    Requires this chat to be signed in — the owner is taken from the session,
-    never from an argument. If it is not, or the session has expired, this
-    fails with instructions to call authenticate; do that and then retry.
+    All of its data arrives at runtime: the create_website result seeds the
+    page, then it follows the deployment through website_status.
     """
-    try:
-        with connect() as conn:
-            session = auth.require(conn, ctx.session_id)
-            owner = user.ensure(conn, session.email)
-            return website.create(conn, slug, owner)
-    except AppError as error:
-        raise ToolError(str(error)) from error
+    return _env.get_template("deployment.html.j2").render()
 
 
-@app.tool
-def list_websites(ctx: Context) -> list[website.Website]:
-    """List every site the signed-in user owns.
+@app.resource(
+    _WEBSITES_URI,
+    app=AppConfig(csp=ResourceCSP(resource_domains=["https://unpkg.com"])),
+)
+def websites_view() -> str:
+    """The websites-overview UI, rendered on cervo's design system.
 
-    Requires this chat to be signed in. An empty list means they have not
-    created any yet, which is not an error.
+    All of its data arrives at runtime: the list_websites result fills the
+    page, and unsettled deployments are followed through website_status.
     """
-    try:
-        with connect() as conn:
-            session = auth.require(conn, ctx.session_id)
-            owner = user.ensure(conn, session.email)
-            return website.for_user(conn, owner)
-    except AppError as error:
-        raise ToolError(str(error)) from error
+    return _env.get_template("websites.html.j2").render()
+
+
+web.register(app)

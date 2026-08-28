@@ -1,0 +1,75 @@
+name: cervo-test
+
+services:
+  tests:
+    build: .
+    command: pytest
+  # OAuth issuer URLs must be https or localhost, so the test stack keeps the
+  # default DOMAIN=localhost and the smoke runner shares caddy's network
+  # namespace: http://localhost reaches the front door, and the other
+  # services (app, mail) still resolve by name through that namespace.
+  smoke:
+    build: .
+    command: pytest -v tests/smoke.py
+    network_mode: service:caddy
+    depends_on:
+      - app
+  app:
+    build: .
+    restart: unless-stopped
+    # Two uvicorn workers, so the suite proves what makes several safe:
+    # stateless MCP and SQLite in WAL — every request may land anywhere.
+    environment:
+      WEB_CONCURRENCY: 2
+    volumes:
+      - data:/mnt/data
+    depends_on:
+      - worker
+      - caddy
+      - mail
+  worker:
+    build: .
+    command: cervo-worker
+    restart: unless-stopped
+    # Two polling threads, so the suite exercises concurrent claiming and
+    # the one-at-a-time rule for the Caddyfile jobs.
+    environment:
+      WORKER_CONCURRENCY: 2
+    volumes:
+      - data:/mnt/data
+  # Seeding a stub Caddyfile keeps caddy from crash-looping on the fresh
+  # volume: the smoke runner joins this container's network namespace, and a
+  # restart while it joins kills the run. The worker's startup heal replaces
+  # the stub through the admin API moments later.
+  #
+  # The list command form is load-bearing: a string command is word-split by
+  # compose, which strips printf's backslashes and turns every \n into a
+  # literal "n" — a one-line, unparseable Caddyfile that crash-loops caddy.
+  # A list reaches the shell verbatim, so the newlines survive.
+  caddy:
+    image: caddy:latest
+    # Unprivileged as in production (the sysctl re-allows :80/:443), state
+    # in /tmp — and started after the worker, whose image seeds the fresh
+    # data volume with the unprivileged owner the stub write needs.
+    user: "1000:1000"
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 80
+    environment:
+      XDG_DATA_HOME: /tmp/caddy
+      XDG_CONFIG_HOME: /tmp/caddy
+    depends_on:
+      - worker
+    command:
+      - sh
+      - -c
+      - |
+        test -f /mnt/data/Caddyfile || printf '%s\n' '{' 'admin 0.0.0.0:2019' '}' ':80' > /mnt/data/Caddyfile
+        exec caddy run --config /mnt/data/Caddyfile --adapter caddyfile
+    restart: unless-stopped
+    volumes:
+      - data:/mnt/data
+  mail:
+    image: schickling/mailcatcher:latest
+
+volumes:
+  data:

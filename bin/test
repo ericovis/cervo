@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Run the unit suite in the throwaway test stack; extra arguments go to
+# pytest. The trap removes the stack's containers, network, and volume.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+compose() { docker compose -f docker-compose.test.yml "$@"; }
+trap 'compose down -v --remove-orphans' EXIT
+
+compose run --build --rm tests pytest -v "$@"

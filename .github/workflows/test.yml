@@ -6,7 +6,6 @@ on:
   pull_request:
   workflow_dispatch:
 
-# A new push to the same branch makes the previous run irrelevant.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -22,8 +21,6 @@ jobs:
         with:
           enable-cache: true
 
-      # --locked fails rather than silently resolving, so a stale uv.lock is a
-      # test failure instead of a surprise later.
       - name: Install dependencies
         run: uv sync --locked
 
@@ -33,7 +30,8 @@ jobs:
       - name: Check formatting
         run: uv run ruff format --check .
 
-      # No services: the suite points DATA_DIR at a tmp_path and replaces
-      # mail.send, so it needs neither caddy nor mailcatcher.
-      - name: Test
-        run: uv run pytest
+      - name: Unit tests
+        run: bin/test
+
+      - name: Smoke tests
+        run: bin/smoke

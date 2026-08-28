@@ -1,0 +1,89 @@
+"""Queuing background work and accounting for how it went.
+
+The rules are deliberately few: a job is retried with a delay until it either
+succeeds or spends its attempts, and a running job that outlives its timeout
+is treated as a failed attempt — the worker holding it is presumed dead, so
+this is also the crash recovery.
+"""
+
+import sqlite3
+from collections.abc import Sequence
+from typing import Any
+
+from cervo.job import _dao
+from cervo.job.types import Job
+
+_MAX_ATTEMPTS = 3
+_RETRY_DELAY = 30  # seconds before a failed job is due again
+_DEFAULT_TIMEOUT = 300  # seconds a job may run before it is presumed dead
+
+# Kinds declared one-at-a-time (see serialize). Filled at import time by the
+# domains that own the kinds, so every claimer enforces the same rule.
+_SERIALIZED: set[str] = set()
+
+
+def create_tables(conn: sqlite3.Connection) -> None:
+    """Create this domain's storage. Safe to call on every startup."""
+    _dao.create_tables(conn)
+
+
+def enqueue(
+    conn: sqlite3.Connection,
+    kind: str,
+    payload: dict[str, Any],
+    timeout: int = _DEFAULT_TIMEOUT,
+) -> Job:
+    """Queue work for the worker process to pick up."""
+    return _dao.insert(conn, kind, payload, timeout)
+
+
+def serialize(kind: str) -> None:
+    """Have jobs of ``kind`` run one at a time, even across many workers.
+
+    For work every job of the kind shares — a file they all rewrite, an API
+    they all reload — where two at once would trample each other. A due job
+    of a serialized kind stays pending while another of the same kind runs;
+    every other kind keeps flowing around it.
+    """
+    _SERIALIZED.add(kind)
+
+
+def claim_due(conn: sqlite3.Connection) -> Job | None:
+    """Take one due job and mark it running. None means nothing is due."""
+    return _dao.claim_due(conn, _SERIALIZED)
+
+
+def succeed(conn: sqlite3.Connection, job_id: int) -> Job:
+    """Record that the job finished."""
+    return _dao.mark_done(conn, job_id)
+
+
+def fail(conn: sqlite3.Connection, job_id: int, error: str) -> Job:
+    """Record a failed attempt; the job retries later or ends up failed."""
+    return _dao.record_failure(conn, job_id, error, _MAX_ATTEMPTS, _RETRY_DELAY)
+
+
+def fail_permanently(conn: sqlite3.Connection, job_id: int, error: str) -> Job:
+    """Fail the job for good — for failures retrying cannot help."""
+    return _dao.mark_failed(conn, job_id, error)
+
+
+def reap(conn: sqlite3.Connection) -> int:
+    """Reclaim timed-out running jobs. Returns how many were reclaimed."""
+    return _dao.reap(conn, _MAX_ATTEMPTS, _RETRY_DELAY)
+
+
+def latest(conn: sqlite3.Connection, kind: str, payload: dict[str, Any]) -> Job | None:
+    """The current state of this piece of work, if it was ever queued."""
+    return _dao.latest(conn, kind, payload)
+
+
+def latest_of(
+    conn: sqlite3.Connection, kinds: Sequence[str], payload: dict[str, Any]
+) -> Job | None:
+    """The newest job among ``kinds`` for this payload, if any was queued.
+
+    For work that runs as a chain of jobs: the newest row says how far the
+    chain has come.
+    """
+    return _dao.latest_of(conn, kinds, payload)

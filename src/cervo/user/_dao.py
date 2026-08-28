@@ -25,6 +25,8 @@ RETURNING id, email
 
 _GET_BY_EMAIL = "SELECT * FROM user WHERE email = ?"
 
+_GET_BY_ID = "SELECT * FROM user WHERE id = ?"
+
 
 def create_tables(conn: sqlite3.Connection) -> None:
     """Create the user table if it does not exist yet."""
@@ -40,4 +42,10 @@ def upsert(conn: sqlite3.Connection, email: str) -> User:
 def get_by_email(conn: sqlite3.Connection, email: str) -> User | None:
     """Return the user with this address, if they exist."""
     row = conn.execute(_GET_BY_EMAIL, (email,)).fetchone()
+    return User(**row) if row else None
+
+
+def get_by_id(conn: sqlite3.Connection, user_id: int) -> User | None:
+    """Return the user with this id, if they exist."""
+    row = conn.execute(_GET_BY_ID, (user_id,)).fetchone()
     return User(**row) if row else None

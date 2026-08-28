@@ -9,13 +9,17 @@ authors = [
 requires-python = ">=3.13"
 dependencies = [
     "fastmcp>=3.4.7",
+    "honeybadger>=1.3.0",
     "jinja2>=3.1.6",
     "pydantic[email]>=2.13.4",
     "python-decouple>=3.8",
+    "python-fasthtml>=0.14.12",
+    "uvicorn>=0.52.4",
 ]
 
 [project.scripts]
 cervo = "cervo:main"
+cervo-worker = "cervo.worker:main"
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13.0"]
@@ -38,6 +42,7 @@ extend-select = ["I", "B", "UP", "SIM", "RUF", "TID"]
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 # A domain's dao is private to it. Everything else goes through its service.
 "cervo.auth._dao".msg = "Use cervo.auth's service instead of reaching into its _dao."
+"cervo.job._dao".msg = "Use cervo.job's service instead of reaching into its _dao."
 "cervo.user._dao".msg = "Use cervo.user's service instead of reaching into its _dao."
 "cervo.website._dao".msg = "Use cervo.website's service instead of reaching into its _dao."
 

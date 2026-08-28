@@ -6,7 +6,7 @@ depends on this, so it is worth pinning down directly.
 
 import pytest
 
-from cervo import user, website
+from cervo import db, user, website
 from cervo.db import connect
 from cervo.errors import AppError
 from tests.conftest import OWNER
@@ -36,3 +36,20 @@ def test_an_unexpected_error_rolls_everything_back():
 
     with connect() as conn:
         assert not website.exists(conn, "rolled-back")
+
+
+def test_connections_run_in_wal_mode():
+    """Several processes share the file; WAL is what makes that livable."""
+    with connect() as conn:
+        (mode,) = conn.execute("PRAGMA journal_mode").fetchone()
+    assert mode == "wal"
+
+
+async def test_transact_commits_off_the_event_loop():
+    """The async wrapper runs the whole transaction and hands back the result."""
+    site = await db.transact(
+        lambda conn: website.create(conn, "threaded", user.ensure(conn, OWNER))
+    )
+    assert site.slug == "threaded"
+    with connect() as conn:
+        assert website.exists(conn, "threaded")

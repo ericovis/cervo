@@ -1,0 +1,202 @@
+# Deploy cervo to the VPS: podman quadlets running the image built and
+# pushed by bin/deploy. Secrets are resolved on the control machine via the
+# 1Password CLI (`op`), so only the values travel over SSH.
+#
+#   ansible-playbook -i deploy/inventory.yml deploy/site.yml -e image_tag=<sha>
+
+- name: Deploy cervo
+  hosts: cervo
+  become: true
+
+  tasks:
+    - name: Ensure podman is installed
+      ansible.builtin.apt:
+        name: podman
+        state: present
+        update_cache: true
+
+    - name: Read the podman version
+      ansible.builtin.command: podman --version
+      register: podman_version
+      changed_when: false
+
+    - name: Quadlets need podman 4.4 or newer
+      ansible.builtin.assert:
+        that: podman_version.stdout.split() | last is version("4.4", ">=")
+        fail_msg: >-
+          {{ podman_version.stdout }} cannot run quadlets — Debian 13 ships
+          podman 5; upgrade the host.
+
+    # An enabled-but-unused docker sets iptables FORWARD to DROP at boot,
+    # which cuts podman's bridge off from the world in both directions.
+    - name: Keep docker off — it breaks podman networking
+      ansible.builtin.systemd_service:
+        name: docker.service
+        enabled: false
+        state: stopped
+      register: docker_off
+      failed_when:
+        - docker_off is failed
+        - "'Could not find the requested service' not in (docker_off.msg | default(''))"
+
+    - name: Forwarded traffic must not be dropped
+      ansible.builtin.command: iptables -P FORWARD ACCEPT
+      changed_when: false
+
+    - name: Ensure the config directory exists
+      ansible.builtin.file:
+        path: /etc/cervo
+        state: directory
+        mode: "0755"
+
+    - name: Write the environment file (secrets resolved via op locally)
+      ansible.builtin.template:
+        src: templates/cervo.env.j2
+        dest: /etc/cervo/env
+        mode: "0600"
+
+    - name: Write the quadlet units
+      ansible.builtin.template:
+        src: "templates/{{ item }}.j2"
+        dest: "/etc/containers/systemd/{{ item }}"
+        mode: "0644"
+      loop:
+        - cervo.network
+        - cervo-app.container
+        - cervo-worker.container
+        - cervo-caddy.container
+
+    - name: Reload systemd so the quadlets become services
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    - name: Pull the image being deployed
+      ansible.builtin.command: "podman pull {{ image_repo }}:{{ image_tag }}"
+      register: pull
+      changed_when: "'Copying' in pull.stderr or pull.stdout != ''"
+
+    # The containers run unprivileged (uid 1000): data written by earlier
+    # root-run deployments must be handed over before the services restart.
+    - name: The data volume must exist before its ownership can be fixed
+      ansible.builtin.command: podman volume create --ignore cervo-data
+      register: volume_created
+      changed_when: volume_created.stdout != ""
+
+    - name: Read where the data volume lives
+      ansible.builtin.command: !unsafe podman volume inspect --format '{{.Mountpoint}}' cervo-data
+      register: data_volume
+      changed_when: false
+
+    - name: The shared data belongs to the unprivileged container user
+      ansible.builtin.file:
+        path: "{{ data_volume.stdout }}"
+        owner: "1000"
+        group: "1000"
+        recurse: true
+
+    # A lost container network (a prune while debugging, a backend
+    # migration) leaves cervo-network.service "active" while podman knows
+    # nothing of it — and then no container can start. Recreate it before
+    # betting the restart on it.
+    - name: Check the container network still exists
+      ansible.builtin.command: podman network exists cervo
+      register: network_exists
+      changed_when: false
+      failed_when: network_exists.rc not in [0, 1]
+
+    - name: Recreate a lost container network
+      ansible.builtin.systemd_service:
+        name: cervo-network.service
+        state: restarted
+      when: network_exists.rc == 1
+
+    # Worker first: its startup heal re-renders the Caddyfile from the
+    # database with the freshly deployed template. Caddy after, so it reads
+    # the new file even when the reload API was not up during the heal.
+    - name: Restart the services
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: restarted
+      loop:
+        - cervo-worker.service
+        - cervo-caddy.service
+        - cervo-app.service
+
+    # Everything below needs the Honeybadger project key and is skipped
+    # without it. Log shipping: podman already writes every container's
+    # output to journald; vector tails the cervo units and forwards them to
+    # Honeybadger Insights. Vector's apt repository is Datadog's (they
+    # maintain vector), hence the signing key.
+    - name: Registering an apt repository needs python3-debian
+      ansible.builtin.apt:
+        name: python3-debian
+        state: present
+      when: honeybadger_api_key is defined
+
+    - name: Register vector's apt repository
+      ansible.builtin.deb822_repository:
+        name: vector
+        types: deb
+        uris: https://apt.vector.dev/
+        suites: stable
+        components: vector-0
+        signed_by: https://keys.datadoghq.com/DATADOG_APT_KEY_CURRENT.public
+      register: vector_repo
+      when: honeybadger_api_key is defined
+
+    - name: A fresh repository must be read before installing from it
+      ansible.builtin.apt:
+        update_cache: true
+      when: honeybadger_api_key is defined and vector_repo is changed
+
+    - name: Ensure vector is installed
+      ansible.builtin.apt:
+        name: vector
+        state: present
+      when: honeybadger_api_key is defined
+
+    - name: Vector may read the journal
+      ansible.builtin.user:
+        name: vector
+        groups: systemd-journal
+        append: true
+      when: honeybadger_api_key is defined
+
+    - name: Write vector's config — cervo's journald units to Honeybadger
+      ansible.builtin.template:
+        src: templates/vector.yaml.j2
+        dest: /etc/vector/vector.yaml
+        owner: vector
+        group: vector
+        mode: "0600"
+      register: vector_config
+      when: honeybadger_api_key is defined
+
+    - name: Vector runs, restarted when its config changed
+      ansible.builtin.systemd_service:
+        name: vector
+        enabled: true
+        state: "{{ 'restarted' if vector_config is changed else 'started' }}"
+      when: honeybadger_api_key is defined
+
+    # Honeybadger pins errors and logs to deploys by revision. image_tag is
+    # the deployed commit's short sha (bin/deploy tags by sha; rollbacks
+    # rerun the playbook with an older one), resolved to the full sha on
+    # the control machine — so the report is honest for rollbacks too.
+    - name: Tell Honeybadger this revision is live
+      ansible.builtin.uri:
+        url: https://api.honeybadger.io/v1/deploys
+        method: POST
+        headers:
+          X-API-Key: "{{ honeybadger_api_key }}"
+        body_format: json
+        body:
+          deploy:
+            environment: production
+            revision: "{{ lookup('pipe', 'git -C ' ~ playbook_dir ~ '/.. rev-parse ' ~ image_tag) }}"
+            repository: https://github.com/ericovis/cervo
+            local_username: "{{ lookup('env', 'USER') }}"
+        status_code: [200, 201]
+      delegate_to: localhost
+      become: false
+      when: honeybadger_api_key is defined

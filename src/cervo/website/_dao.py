@@ -2,35 +2,56 @@
 
 Private to the package, hence the underscore — reach these through
 ``cervo.website``'s service.
+
+Timestamps (``created_at``, ``updated_at``) are unix epoch seconds, written
+only here; they leave as the model's datetimes.
 """
 
 import sqlite3
+from datetime import UTC, datetime
 
-from cervo.website.types import Website
+from cervo.website.types import Route, Website
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS website (
     slug TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES user (id)
+    user_id INTEGER NOT NULL REFERENCES user (id),
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
 )
 """
 
-# One lookup per owner is the common read, so it is worth an index.
 _CREATE_OWNER_INDEX = """
 CREATE INDEX IF NOT EXISTS website_user_id ON website (user_id)
 """
 
 _UPSERT = """
-INSERT INTO website (slug, user_id)
-VALUES (:slug, :user_id)
-ON CONFLICT (slug) DO UPDATE SET user_id = excluded.user_id
+INSERT INTO website (slug, user_id, created_at, updated_at)
+VALUES (:slug, :user_id, :now, :now)
+ON CONFLICT (slug) DO UPDATE
+SET user_id = excluded.user_id, updated_at = excluded.updated_at
+RETURNING *
 """
+
+_GET = "SELECT * FROM website WHERE slug = ?"
 
 _EXISTS = "SELECT 1 FROM website WHERE slug = ?"
 
 _FOR_USER = "SELECT * FROM website WHERE user_id = ? ORDER BY slug"
 
+_ALL = "SELECT * FROM website ORDER BY slug"
+
+_ROUTES = """
+SELECT website.slug, user.email AS owner_email
+FROM website JOIN user ON user.id = website.user_id
+ORDER BY website.slug
+"""
+
 _DELETE = "DELETE FROM website WHERE slug = ?"
+
+
+def _now() -> float:
+    return datetime.now(UTC).timestamp()
 
 
 def create_tables(conn: sqlite3.Connection) -> None:
@@ -39,10 +60,18 @@ def create_tables(conn: sqlite3.Connection) -> None:
     conn.execute(_CREATE_OWNER_INDEX)
 
 
-def upsert(conn: sqlite3.Connection, website: Website) -> Website:
+def upsert(conn: sqlite3.Connection, slug: str, user_id: int) -> Website:
     """Insert the website, or hand it to a new owner if the slug is taken."""
-    conn.execute(_UPSERT, website.model_dump(mode="json"))
-    return website
+    row = conn.execute(
+        _UPSERT, {"slug": slug, "user_id": user_id, "now": _now()}
+    ).fetchone()
+    return Website(**row)
+
+
+def get(conn: sqlite3.Connection, slug: str) -> Website | None:
+    """The website using this slug, if any."""
+    row = conn.execute(_GET, (slug,)).fetchone()
+    return Website(**row) if row else None
 
 
 def exists(conn: sqlite3.Connection, slug: str) -> bool:
@@ -54,6 +83,18 @@ def for_user(conn: sqlite3.Connection, user_id: int) -> list[Website]:
     """Every site this user owns, oldest slug first alphabetically."""
     rows = conn.execute(_FOR_USER, (user_id,)).fetchall()
     return [Website(**row) for row in rows]
+
+
+def all_sites(conn: sqlite3.Connection) -> list[Website]:
+    """Every site there is."""
+    rows = conn.execute(_ALL).fetchall()
+    return [Website(**row) for row in rows]
+
+
+def routes(conn: sqlite3.Connection) -> list[Route]:
+    """Every site with its owner's email, for the web server's config."""
+    rows = conn.execute(_ROUTES).fetchall()
+    return [Route(**row) for row in rows]
 
 
 def delete(conn: sqlite3.Connection, slug: str) -> bool:

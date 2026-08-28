@@ -2,7 +2,7 @@
 
 from cervo import user, website
 from cervo.db import connect
-from tests.conftest import OWNER, chat, sign_in
+from tests.conftest import OWNER, chat
 
 
 def test_a_user_is_created_on_first_sight():
@@ -52,14 +52,12 @@ def test_sites_are_not_visible_to_other_users():
         assert website.for_user(conn, bob) == []
 
 
-async def test_signing_in_twice_does_not_duplicate_the_user(mailbox):
+async def test_signing_in_twice_does_not_duplicate_the_user():
     """Two conversations, one person, one row in the user table."""
     async with chat() as first:
-        await sign_in(first, mailbox)
         await first.call_tool("list_websites")
 
     async with chat() as second:
-        await sign_in(second, mailbox)
         await second.call_tool("list_websites")
 
     with connect() as conn:

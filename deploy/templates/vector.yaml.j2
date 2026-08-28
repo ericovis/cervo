@@ -1,0 +1,37 @@
+# {{ ansible_managed }} — mode 0600: the sink header carries the project key.
+#
+# Podman writes every container's output to journald; vector tails the
+# cervo units and ships them to Honeybadger Insights as newline-delimited
+# JSON events. Caddy logs JSON, so parse_json lifts its fields into the
+# event; the python services' plain lines arrive as their message.
+sources:
+  cervo_units:
+    type: journald
+    include_units:
+      - cervo-app.service
+      - cervo-worker.service
+      - cervo-caddy.service
+
+transforms:
+  essentials:
+    type: remap
+    inputs: [cervo_units]
+    source: |
+      . = {"host": .host, "unit": ._SYSTEMD_UNIT, "message": .message, "timestamp": .timestamp}
+      structured = parse_json(.message) ?? {}
+      . = merge!(., structured)
+
+sinks:
+  honeybadger:
+    type: http
+    inputs: [essentials]
+    uri: https://api.honeybadger.io/v1/events
+    request:
+      headers:
+        X-API-Key: "{{ honeybadger_api_key }}"
+    encoding:
+      codec: json
+    framing:
+      method: newline_delimited
+    batch:
+      max_bytes: 1000000
