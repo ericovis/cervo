@@ -51,6 +51,8 @@ What actually varies between environments is read from the environment / `.env` 
 | `ACME_EMAIL` | *(empty)* | ACME contact for cervo's own hostname; each hosted site registers its owner's email instead |
 | `WEB_CONCURRENCY` | `1` | uvicorn worker processes serving `app`; safe to raise — MCP is stateless and SQLite runs in WAL |
 | `WORKER_CONCURRENCY` | `1` | polling threads in the `worker` container; safe to raise — job claiming is atomic and the Caddyfile kinds are serialized |
+| `HONEYBADGER_API_KEY` | *(empty)* | Honeybadger project key; empty (dev, tests) disables error reporting and Insights entirely |
+| `HONEYBADGER_ENVIRONMENT` | `development` | environment tag on Honeybadger reports; the production env file sets `production` |
 | `EMAIL_HOST` / `EMAIL_PORT` | `mail` / `1025` | SMTP (the mailcatcher service in dev) |
 | `EMAIL_FROM` | `cervo@localhost` | From address on outgoing mail |
 | `EMAIL_USER` / `EMAIL_PASSWORD` | *(empty)* | set for a real SMTP provider — switches `mail.send` to STARTTLS + login (port 587 shape) |
@@ -85,6 +87,9 @@ Auth has no knobs: token and code lifetimes are private constants in
   need no wrapper — FastMCP already runs those in its threadpool
 - `src/cervo/errors.py` — `AppError`, the base for failures the user should read
 - `src/cervo/mail.py` — sending mail over SMTP (the sign-in codes)
+- `src/cervo/monitoring.py` — reporting to Honeybadger, production only: the
+  ASGI wrap and MCP middleware for the server's errors, `report`/`event` for
+  the worker's, and `setup`. Everything is a no-op without the API key.
 - `src/cervo/caddy.py` — rendering the Caddyfile from the database and reloading
   caddy over its admin API
 - `src/cervo/templates/` — jinja2 templates: the Caddyfile and the MCP app
@@ -105,6 +110,14 @@ Auth has no knobs: token and code lifetimes are private constants in
 playbook in `deploy/` against the VPS (podman quadlets, secrets from
 1Password at deploy time). See the README's Deploying section for the
 runbook; `deploy/inventory.yml` is gitignored on purpose.
+
+When the inventory carries `honeybadger_api_key`, the playbook also turns on
+observability: the key lands in the environment file (enabling error
+reporting and Insights in the services), vector is installed to ship the
+cervo units' journald output to Honeybadger Insights
+(`deploy/templates/vector.yaml.j2`), and the deployed revision — `image_tag`
+resolved to a full commit sha, honest for rollbacks too — is reported to
+Honeybadger's deploys API after the services restart.
 
 ## Domains
 
@@ -271,8 +284,10 @@ every pull request.
 Tests never touch development data or services: autouse fixtures in
 `tests/conftest.py` repoint `config.DATA_DIR` and `config.DATABASE_PATH` at a
 per-test `tmp_path` (creating the tables there), replace `mail.send` with a
-capture list, and replace `caddy.reload` the same way. All three are autouse —
-a test cannot escape them by forgetting a fixture — and
+capture list, replace `caddy.reload` the same way, and capture the
+Honeybadger client's sends (`reports`, `insights`) while setting a fake API
+key, so the real reporting paths run without a byte leaving the process. All
+four are autouse — a test cannot escape them by forgetting a fixture — and
 `tests/test_isolation.py` asserts the guarantees hold.
 
 Write tests against the MCP tools rather than the services. Auth lives in

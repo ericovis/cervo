@@ -11,7 +11,7 @@ from fastmcp.server.dependencies import get_access_token
 from jinja2 import Environment, PackageLoader
 from pydantic import Field
 
-from cervo import auth, db, user, web, website
+from cervo import auth, db, monitoring, user, web, website
 from cervo.db import connect
 from cervo.errors import AppError
 
@@ -20,6 +20,10 @@ from cervo.errors import AppError
 # and unauthenticated calls to /mcp are refused with a 401 before any tool
 # runs. Signing in happens in the browser when the connector is added.
 app = FastMCP("cervo", auth=auth.CervoOAuthProvider())
+
+# Unexpected failures inside MCP operations go to Honeybadger before FastMCP
+# masks them into protocol errors; deliberate refusals (ToolError) do not.
+app.add_middleware(monitoring.ReportMCPErrors())
 
 _env = Environment(loader=PackageLoader("cervo"), autoescape=True)
 

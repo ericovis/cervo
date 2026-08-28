@@ -1,7 +1,8 @@
-"""Fixtures that keep tests off the development data, SMTP, and caddy.
+"""Fixtures keeping tests off the development data, SMTP, caddy — and Honeybadger.
 
-All three guards are autouse, so a test cannot reach real data, a real mail
-server, or caddy's admin API even by forgetting to ask for a fixture.
+All four guards are autouse, so a test cannot reach real data, a real mail
+server, caddy's admin API, or Honeybadger even by forgetting to ask for a
+fixture.
 
 Auth is enforced at the HTTP layer, so tests talk to the server the way
 Claude does: over its ASGI app, signing in through the real OAuth flow
@@ -21,6 +22,7 @@ import httpx
 import pytest
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
+from honeybadger import honeybadger
 
 from cervo import caddy, config, mail, server, worker
 from cervo.schema import create_tables
@@ -101,6 +103,37 @@ def mailbox(monkeypatch) -> Mailbox:
     monkeypatch.setattr(mail, "send", fake_send)
     _inbox = sent
     return sent
+
+
+@pytest.fixture(autouse=True)
+def reports(monkeypatch) -> list:
+    """Capture Honeybadger error reports instead of talking to its API.
+
+    An API key is set so the real reporting paths run under test; what is
+    replaced is the client's send. A key in the host environment therefore
+    cannot leak reports out of a test run either — and tests get to assert
+    exactly what would have been sent.
+    """
+    monkeypatch.setattr(config, "HONEYBADGER_API_KEY", "hbp_test")
+    captured = []
+
+    def fake_notify(**kwargs) -> None:
+        captured.append(kwargs)
+
+    monkeypatch.setattr(honeybadger, "notify", fake_notify)
+    return captured
+
+
+@pytest.fixture(autouse=True)
+def insights(monkeypatch) -> list:
+    """Capture Insights events the same way `reports` captures errors."""
+    captured = []
+
+    def fake_event(event_type, data) -> None:
+        captured.append((event_type, data))
+
+    monkeypatch.setattr(honeybadger, "event", fake_event)
+    return captured
 
 
 @pytest.fixture(autouse=True)

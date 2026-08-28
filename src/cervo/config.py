@@ -31,6 +31,10 @@ WEB_CONCURRENCY = config("WEB_CONCURRENCY", default=1, cast=int)  # uvicorn
 WORKER_CONCURRENCY = config("WORKER_CONCURRENCY", default=1, cast=int)  # the
 # worker service's polling threads, all in its one container; job claiming
 # is atomic in the database, so more never double-runs a job.
+HONEYBADGER_API_KEY = config("HONEYBADGER_API_KEY", default="")  # set only by
+# production's environment file; empty keeps error reporting and Insights
+# off entirely, which is what development and tests want.
+HONEYBADGER_ENVIRONMENT = config("HONEYBADGER_ENVIRONMENT", default="development")
 
 
 def origin(host: str | None = None) -> str:

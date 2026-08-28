@@ -7,6 +7,8 @@ so any worker can serve any request — state worth keeping is in the
 database.
 """
 
+from cervo import monitoring
 from cervo.server import app
 
-application = app.http_app(stateless_http=True)
+monitoring.setup()  # per worker process; a no-op outside production
+application = monitoring.wrap(app.http_app(stateless_http=True))

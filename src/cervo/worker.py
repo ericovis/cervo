@@ -13,9 +13,10 @@ behavior deterministically.
 import logging
 import shutil
 import threading
+from time import monotonic
 from typing import Any
 
-from cervo import caddy, config, job, web, website
+from cervo import caddy, config, job, monitoring, web, website
 from cervo.db import connect
 from cervo.schema import create_tables
 
@@ -37,6 +38,7 @@ def main() -> None:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(threadName)s %(message)s"
     )
+    monitoring.setup()  # once for the process; a no-op outside production
     create_tables()
     _heal()  # once, before any thread polls — never concurrently
     threading.current_thread().name = "worker-1"
@@ -66,6 +68,7 @@ def run_once() -> bool:
     if claimed is None:
         return False
 
+    started = monotonic()
     try:
         handler = _HANDLERS.get(claimed.kind)
         if handler is None:
@@ -75,10 +78,15 @@ def run_once() -> bool:
         _log.warning("job %d (%s) failed for good: %s", claimed.id, claimed.kind, error)
         with connect() as conn:
             job.fail_permanently(conn, claimed.id, str(error))
+        monitoring.report(error, permanent=True, **_job_context(claimed))
+        _job_event(claimed, "failed", started)
     except Exception as error:  # noqa: BLE001 — recorded on the job, retried
         _log.warning("job %d (%s) failed: %s", claimed.id, claimed.kind, error)
         with connect() as conn:
-            job.fail(conn, claimed.id, str(error))
+            failed = job.fail(conn, claimed.id, str(error))
+        spent = failed.status == "failed"  # attempts exhausted, no retry coming
+        monitoring.report(error, permanent=spent, **_job_context(claimed))
+        _job_event(claimed, "failed" if spent else "retrying", started)
     else:
         _log.info("job %d (%s) done", claimed.id, claimed.kind)
         with connect() as conn:  # one transaction: a done step and its successor
@@ -86,7 +94,43 @@ def run_once() -> bool:
             follow_up = _NEXT.get(claimed.kind)
             if follow_up:
                 job.enqueue(conn, follow_up, claimed.payload)
+        _job_event(claimed, "done", started)
     return True
+
+
+def _job_context(claimed: job.Job) -> dict[str, Any]:
+    """What Honeybadger should know about a failed job.
+
+    The payload rides along minus any file content — its size tells the
+    story at a millionth of the bytes — and its ``user_id`` (the submitting
+    owner, in every file-chain payload) is a key Honeybadger aggregates
+    who-is-affected by.
+    """
+    payload = {k: v for k, v in claimed.payload.items() if k != "content"}
+    if "content" in claimed.payload:
+        payload["content_bytes"] = len(claimed.payload["content"].encode())
+    return {
+        "component": "worker",
+        "job_id": claimed.id,
+        "kind": claimed.kind,
+        "attempt": claimed.attempts + 1,
+        **payload,
+    }
+
+
+def _job_event(claimed: job.Job, outcome: str, started: float) -> None:
+    """One Insights event per processed job — the worker's request log."""
+    monitoring.event(
+        "job.processed",
+        {
+            "kind": claimed.kind,
+            "job_id": claimed.id,
+            "outcome": outcome,
+            "attempt": claimed.attempts + 1,
+            "duration_ms": round((monotonic() - started) * 1000),
+            "slug": claimed.payload.get("slug"),
+        },
+    )
 
 
 def _provision_website(payload: dict[str, Any]) -> None:

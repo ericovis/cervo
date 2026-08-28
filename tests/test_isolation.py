@@ -1,11 +1,13 @@
 """The guarantees the rest of the suite leans on.
 
-Every test runs against a throwaway database, a fake mail server, and a fake
-caddy admin API. If these fail, treat results from the other files as
-suspect.
+Every test runs against a throwaway database, a fake mail server, a fake
+caddy admin API, and a Honeybadger client whose send is captured. If these
+fail, treat results from the other files as suspect.
 """
 
-from cervo import caddy, config, mail
+from honeybadger import honeybadger
+
+from cervo import caddy, config, mail, monitoring
 from cervo.db import connect
 from tests.conftest import OWNER, chat
 
@@ -46,6 +48,13 @@ def test_caddy_is_never_reached(caddy_reloads):
     assert caddy.reload.__name__ == "fake_reload"
     caddy.reload()
     assert caddy_reloads == [True]
+
+
+def test_honeybadger_is_never_reached(reports):
+    """The client's send is replaced, so no report can leave the process."""
+    assert honeybadger.notify.__name__ == "fake_notify"
+    monitoring.report(RuntimeError("probe"), origin="isolation")
+    assert reports[-1]["context"]["origin"] == "isolation"
 
 
 async def test_the_tables_exist_before_a_test_body_runs():

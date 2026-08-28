@@ -72,6 +72,9 @@ One-time setup:
        email_user: your-smtp-user
        email_from: cervo@example.com # a sender your provider verified
        op_smtp_password: op://cervo/smtp/password
+       # Optional — with it, errors, request/job telemetry, and container
+       # logs flow to Honeybadger, and every deploy is reported there:
+       honeybadger_api_key: your-project-api-key
    ```
 4. On your machine: `ansible` and `op` installed, `op` signed in, docker
    logged out is fine — `bin/deploy` logs in itself.
@@ -87,6 +90,12 @@ hostname from Let's Encrypt and redirects plain http; the first request to
 a fresh site waits a few seconds while its certificate is issued.
 Certificates persist in the `caddy-data` volume, so redeploys never
 re-issue them.
+
+With `honeybadger_api_key` set, the playbook also installs
+[vector](https://vector.dev) to forward the services' journald output to
+Honeybadger Insights, and reports each deploy (with its exact commit sha)
+to Honeybadger — errors, request and job telemetry, logs, and deploys all
+land in one project.
 
 ## Documentation
 

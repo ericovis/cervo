@@ -121,3 +121,80 @@
         - cervo-worker.service
         - cervo-caddy.service
         - cervo-app.service
+
+    # Everything below needs the Honeybadger project key and is skipped
+    # without it. Log shipping: podman already writes every container's
+    # output to journald; vector tails the cervo units and forwards them to
+    # Honeybadger Insights. Vector's apt repository is Datadog's (they
+    # maintain vector), hence the signing key.
+    - name: Registering an apt repository needs python3-debian
+      ansible.builtin.apt:
+        name: python3-debian
+        state: present
+      when: honeybadger_api_key is defined
+
+    - name: Register vector's apt repository
+      ansible.builtin.deb822_repository:
+        name: vector
+        types: deb
+        uris: https://apt.vector.dev/
+        suites: stable
+        components: vector-0
+        signed_by: https://keys.datadoghq.com/DATADOG_APT_KEY_CURRENT.public
+      register: vector_repo
+      when: honeybadger_api_key is defined
+
+    - name: A fresh repository must be read before installing from it
+      ansible.builtin.apt:
+        update_cache: true
+      when: honeybadger_api_key is defined and vector_repo is changed
+
+    - name: Ensure vector is installed
+      ansible.builtin.apt:
+        name: vector
+        state: present
+      when: honeybadger_api_key is defined
+
+    - name: Vector may read the journal
+      ansible.builtin.user:
+        name: vector
+        groups: systemd-journal
+        append: true
+      when: honeybadger_api_key is defined
+
+    - name: Write vector's config — cervo's journald units to Honeybadger
+      ansible.builtin.template:
+        src: templates/vector.yaml.j2
+        dest: /etc/vector/vector.yaml
+        mode: "0600"
+      register: vector_config
+      when: honeybadger_api_key is defined
+
+    - name: Vector runs, restarted when its config changed
+      ansible.builtin.systemd_service:
+        name: vector
+        enabled: true
+        state: "{{ 'restarted' if vector_config is changed else 'started' }}"
+      when: honeybadger_api_key is defined
+
+    # Honeybadger pins errors and logs to deploys by revision. image_tag is
+    # the deployed commit's short sha (bin/deploy tags by sha; rollbacks
+    # rerun the playbook with an older one), resolved to the full sha on
+    # the control machine — so the report is honest for rollbacks too.
+    - name: Tell Honeybadger this revision is live
+      ansible.builtin.uri:
+        url: https://api.honeybadger.io/v1/deploys
+        method: POST
+        headers:
+          X-API-Key: "{{ honeybadger_api_key }}"
+        body_format: json
+        body:
+          deploy:
+            environment: production
+            revision: "{{ lookup('pipe', 'git -C ' ~ playbook_dir ~ '/.. rev-parse ' ~ image_tag) }}"
+            repository: https://github.com/ericovis/cervo
+            local_username: "{{ lookup('env', 'USER') }}"
+        status_code: [200, 201]
+      delegate_to: localhost
+      become: false
+      when: honeybadger_api_key is defined
