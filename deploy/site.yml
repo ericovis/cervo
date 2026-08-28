@@ -166,6 +166,8 @@
       ansible.builtin.template:
         src: templates/vector.yaml.j2
         dest: /etc/vector/vector.yaml
+        owner: vector
+        group: vector
         mode: "0600"
       register: vector_config
       when: honeybadger_api_key is defined
