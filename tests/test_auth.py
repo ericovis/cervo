@@ -147,6 +147,24 @@ async def test_reissuing_a_code_invalidates_the_previous_one(mailbox):
         assert mailbox.last.to == OWNER
 
 
+async def test_codes_to_one_address_are_capped(mailbox):
+    """The unauthenticated send endpoint cannot flood a chosen inbox.
+
+    A recipient takes at most _CODE_SENDS_PER_WINDOW codes per window; the
+    next request is refused and re-renders the email form rather than mailing.
+    """
+    async with serving() as web:
+        flow = Flow(web)
+        await flow.authorize()
+        for _ in range(service._CODE_SENDS_PER_WINDOW):
+            assert (await flow.submit_email(OWNER)).status_code == 303
+        blocked = await flow.submit_email(OWNER)
+
+    assert blocked.status_code == 200  # the email form, re-rendered with the reason
+    assert "Too many codes" in blocked.text
+    assert len(mailbox) == service._CODE_SENDS_PER_WINDOW  # the extra was not sent
+
+
 async def test_an_expired_sign_in_is_refused(monkeypatch):
     monkeypatch.setattr(service, "_TXN_TTL", 0)
     async with serving() as web:

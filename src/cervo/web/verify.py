@@ -87,8 +87,14 @@ async def submit_email(request: Request) -> Response:
     # so the mail server's latency never lands on the event loop.
     try:
         await db.transact(lambda conn: auth.send_code(conn, txn_id, address))
-    except auth.AuthError:
-        return _no_store(_gone_page())
+    except auth.AuthError as error:
+        # A dead transaction is over; a throttle refusal is not — keep the user
+        # on the email step with the reason rather than sending them back.
+        if "expired" in str(error):
+            return _no_store(_gone_page())
+        return _no_store(
+            _email_page(txn_id, email=address, error=str(error), accepted=accepted)
+        )
     return _no_store(RedirectResponse(f"/verify?txn={txn_id}", status_code=303))
 
 

@@ -41,6 +41,12 @@ _ACCESS_TOKEN_TTL = 3600
 _CODE_DIGITS = 6
 _MAX_ATTEMPTS = 5
 
+# At most this many verification codes go to one address per window, so cervo
+# cannot be driven to flood a chosen inbox (or burn the sender's reputation).
+# High enough that a genuine typo-and-retry or a reissue is never in the way.
+_CODE_SENDS_PER_WINDOW = 6
+_CODE_SEND_WINDOW = 3600  # seconds
+
 _SUBJECT = "Your cervo verification code"
 _BODY = """\
 Someone is connecting cervo with this email address.
@@ -125,6 +131,19 @@ def send_code(conn: sqlite3.Connection, txn_id: str, email: str) -> Transaction:
             "This sign-in attempt has expired. Go back to Claude and connect again."
         )
 
+    # Cap codes per recipient (case-folded, so case cannot dodge it): an
+    # unauthenticated caller can reach this endpoint, so without a cap it is a
+    # mailbomb for any address someone names.
+    address = email.lower()
+    now = time.time()
+    if _dao.active_send_count(conn, address, now, _CODE_SEND_WINDOW) >= (
+        _CODE_SENDS_PER_WINDOW
+    ):
+        raise AuthError(
+            "Too many codes have been sent to that address recently. Please wait "
+            "a while before requesting another."
+        )
+
     code = "".join(secrets.choice("0123456789") for _ in range(_CODE_DIGITS))
     # Mail first: a send failure must not leave a challenge nobody can answer.
     # The link is a way back to the code form; it only helps whoever already
@@ -138,6 +157,7 @@ def send_code(conn: sqlite3.Connection, txn_id: str, email: str) -> Transaction:
             minutes=_TXN_TTL // 60,
         ),
     )
+    _dao.record_send(conn, address, now, _CODE_SEND_WINDOW)
     _dao.set_txn_challenge(conn, txn_id, email, _hash(code))
     return _dao.get_txn(conn, txn_id)
 
