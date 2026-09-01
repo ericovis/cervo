@@ -228,10 +228,11 @@ class Flow:
         self.txn = parse_qs(urlparse(location).query)["txn"][0]
         return self.txn
 
-    async def submit_email(self, email: str) -> httpx.Response:
-        return await self.web.post(
-            "/verify/email", data={"txn": self.txn, "email": email}
-        )
+    async def submit_email(self, email: str, accept: bool = True) -> httpx.Response:
+        data = {"txn": self.txn, "email": email}
+        if accept:  # the consent tick box, as a browser would send it
+            data["accept"] = "yes"
+        return await self.web.post("/verify/email", data=data)
 
     async def submit_code(self, code: str) -> httpx.Response:
         return await self.web.post("/verify/code", data={"txn": self.txn, "code": code})

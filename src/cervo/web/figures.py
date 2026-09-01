@@ -168,10 +168,14 @@ def verification_flow():
         _box(0.5, 10, 189, 190, fill=_BG, rx=10),
         _text(18, 40, "● SIGN IN", fill=_ACCENT, size=9.5, spacing=1.2),
         _text(18, 62, "Connect to cervo", fill=_INK, size=13, weight=600),
-        _text(18, 92, "YOUR EMAIL", fill=_MUTED, size=9, spacing=1.2),
-        _box(18, 100, 154, 30, rx=6),
-        _text(30, 120, "you@example.com", fill=_MUTED, size=10.5),
-        _button(18, 144, 112, 30, "Send the code", size=10.5, rx=6),
+        _text(18, 88, "YOUR EMAIL", fill=_MUTED, size=9, spacing=1.2),
+        _box(18, 96, 154, 28, rx=6),
+        _text(30, 115, "you@example.com", fill=_MUTED, size=10.5),
+        # The consent tick box: required before the code is sent.
+        _box(18, 134, 12, 12, rx=3, fill=_ACCENT, stroke=_ACCENT),
+        _path("M21 140 L23.5 142.5 L27.5 137.5", stroke=_BG, width=1.6),
+        _text(38, 144, "I agree to the terms", fill=_MUTED, size=8.5),
+        _button(18, 158, 112, 28, "Send the code", size=10.5, rx=6),
         _arrow(196, 105),
         # 2 — the code lands in the inbox.
         _box(225.5, 10, 189, 190, fill=_BG, rx=10),

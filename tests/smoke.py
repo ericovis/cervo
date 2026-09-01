@@ -137,7 +137,10 @@ class Flow:
         return self.txn
 
     def submit_email(self, email: str) -> httpx.Response:
-        return self.web.post("/verify/email", data={"txn": self.txn, "email": email})
+        return self.web.post(
+            "/verify/email",
+            data={"txn": self.txn, "email": email, "accept": "yes"},
+        )
 
     def submit_code(self, code: str) -> httpx.Response:
         return self.web.post("/verify/code", data={"txn": self.txn, "code": code})

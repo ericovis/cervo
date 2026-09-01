@@ -137,7 +137,9 @@ def docs_page() -> HTMLResponse:
             figures.verification_flow(),
             Ol(
                 Li(
-                    "On the page Claude opened, type your email address and click ",
+                    "On the page Claude opened, type your email address, "
+                    "tick the box to accept the terms of service and the "
+                    "privacy policy, and click ",
                     Strong("Send the code"),
                     ".",
                 ),
@@ -163,12 +165,12 @@ def docs_page() -> HTMLResponse:
             P(
                 "Cervo will never ask you for that code in the chat, only "
                 "on its own page. From then on the connection keeps itself "
-                "signed in — you will not be asked again. By connecting you "
-                "agree to the ",
+                "signed in — you will not be asked again. That page is also "
+                "where you accept the ",
                 A("terms of service", href="/terms"),
                 " and the ",
                 A("privacy policy", href="/privacy"),
-                ".",
+                "; no code is sent until you do.",
             ),
             anchor="signing-in",
         ),
