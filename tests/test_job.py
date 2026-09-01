@@ -161,6 +161,26 @@ def test_a_zombie_cannot_finalize_a_reclaimed_job():
     assert row["status"] == "done"
 
 
+def test_pruning_drops_only_old_terminal_jobs_of_the_named_kinds():
+    """Housekeeping removes stale terminal rows, sparing fresh and other kinds."""
+    with connect() as conn:
+        stale = job.enqueue(conn, "tests.bulky", {"n": 1})
+        fresh = job.enqueue(conn, "tests.bulky", {"n": 2})
+        other = job.enqueue(conn, "tests.keep", {"n": 3})
+        # Only `stale` is both terminal and old.
+        conn.execute("UPDATE job SET status = 'done'")
+        conn.execute(
+            "UPDATE job SET created_at = 0 WHERE id = ?", (stale.id,)
+        )
+
+    with connect() as conn:
+        removed = job.prune(conn, ("tests.bulky",), older_than=3600)
+        remaining = {row["id"] for row in conn.execute("SELECT id FROM job")}
+
+    assert removed == 1
+    assert remaining == {fresh.id, other.id}  # fresh spared, other kind untouched
+
+
 def test_latest_matches_the_exact_kind_and_payload():
     old = enqueued(slug="a")
     other = enqueued(slug="b")  # noqa: F841 — must not be matched below
