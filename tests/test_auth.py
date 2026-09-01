@@ -2,7 +2,7 @@
 
 import pytest
 
-from cervo.auth import service
+from cervo.auth import CervoOAuthProvider, service
 from cervo.db import connect
 from tests.conftest import OWNER, Flow, call, chat, serving
 
@@ -23,6 +23,44 @@ async def test_the_mcp_endpoint_demands_a_token():
 
     assert response.status_code == 401
     assert "resource_metadata" in response.headers["www-authenticate"]
+
+
+async def test_only_claude_clients_may_register():
+    """DCR is open, but only for Claude's callbacks (loopback or claude.ai).
+
+    A self-registered client pointing at an attacker's own server is what
+    turns the genuine sign-in into a confused-deputy phishing vector, so it is
+    refused.
+    """
+    base = {
+        "token_endpoint_auth_method": "none",
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "client_name": "probe",
+    }
+    async with serving() as web:
+        loopback = await web.post(
+            "/register",
+            json={**base, "redirect_uris": ["http://localhost:33418/callback"]},
+        )
+        hosted = await web.post(
+            "/register",
+            json={**base, "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"]},
+        )
+        attacker = await web.post(
+            "/register", json={**base, "redirect_uris": ["https://attacker.example/cb"]}
+        )
+
+    assert loopback.status_code == 201  # Claude Code
+    assert hosted.status_code == 201  # claude.ai / Desktop
+    assert attacker.status_code == 400
+    assert attacker.json()["error"] == "invalid_redirect_uri"
+
+
+async def test_a_cimd_document_from_a_non_claude_host_is_refused():
+    """A CIMD client_id is any https URL, so only Claude's host is honored."""
+    provider = CervoOAuthProvider()
+    assert await provider.get_client("https://attacker.example/cimd.json") is None
 
 
 async def test_the_whole_flow_signs_a_chat_in(mailbox):
