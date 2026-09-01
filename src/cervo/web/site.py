@@ -43,4 +43,7 @@ def default_page(slug: str, url: str, deployed_at: str) -> str:
             ),
         ),
         base=base,
+        description=(
+            f"{host} is live on cervo. Its owner has not published a page yet."
+        ),
     )

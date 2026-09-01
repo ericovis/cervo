@@ -266,4 +266,8 @@ def docs_page() -> HTMLResponse:
             ),
             anchor="how-deployments-work",
         ),
+        description=(
+            "How to add cervo to Claude, prove your email address, and make "
+            "websites by asking for them."
+        ),
     )

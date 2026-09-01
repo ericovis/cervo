@@ -1,3 +1,5 @@
+<img src="src/cervo/brand/mark-512-transparent.png" alt="" width="64">
+
 # cervo
 
 A demo app for managing static website hosting on a shared VPS. It's built as an MCP server ([FastMCP](https://gofastmcp.com), served over HTTP), so the hosting is managed by chatting with an AI: in development, [Claude Code](https://claude.com/claude-code) acts as the chat interface for exercising and testing the server's tools.
@@ -107,3 +109,7 @@ Detailed information lives in [CLAUDE.md](CLAUDE.md) (also loaded by Claude Code
 - [Configuration](CLAUDE.md#configuration) — all settings and their defaults
 - [Layout](CLAUDE.md#layout) — where things live in the codebase
 - [Testing with Claude Code](CLAUDE.md#testing-with-claude-code) — the development/testing workflow
+
+The look of every cervo-served page — tokens, components, and the brand
+assets in `src/cervo/brand/` — is written down in
+[design-system/DESIGN_SYSTEM.md](design-system/DESIGN_SYSTEM.md).

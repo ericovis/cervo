@@ -1,0 +1,128 @@
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.13"
+# dependencies = ["pillow"]
+# ///
+"""Regenerate the brand set from src/cervo/brand/mark.svg.
+
+The mark is the one drawing: every other file here is it, on the plate or
+alone, at a different size — so there is exactly one place a change to the
+antler has to happen. Run this after editing mark.svg.
+
+Rasterizing needs Chrome (headless), which is a maintainer's tool, not a
+project dependency: nothing in the app, the tests, or CI runs this script.
+Point CHROME at the binary if it lives somewhere unusual.
+"""
+
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+from PIL import Image
+
+BRAND = Path(__file__).resolve().parent.parent / "src" / "cervo" / "brand"
+
+# The mark is drawn on a 24-unit grid. Scaled to 15/16 and nudged up, its
+# ink sits centred on the plate with an even margin — the framing the
+# delivered 512s were cut at, kept so the set stays recognisable.
+GRID = 24
+PLATE_RADIUS = 4.3
+MARK_SCALE = 0.9375
+MARK_DX, MARK_DY = 0.75, -1.125
+
+INK = "#e5a83c"  # --accent, dark theme
+PLATE = "#1b1a16"  # --bg, dark theme
+
+# name -> (pixel size, plate). A square plate is for iOS, which rounds the
+# corners itself; no plate at all is the mark alone, on transparency.
+ROUNDED, SQUARE, NONE = "rounded", "square", "none"
+RASTERS = {
+    "favicon-16.png": (16, ROUNDED),
+    "favicon-32.png": (32, ROUNDED),
+    "favicon-48.png": (48, ROUNDED),
+    "apple-touch-icon-180.png": (180, SQUARE),
+    "icon-512.png": (512, ROUNDED),
+    "mark-512-transparent.png": (512, NONE),
+}
+
+
+def paths() -> str:
+    """The mark's <path> elements, straight out of mark.svg."""
+    svg = (BRAND / "mark.svg").read_text()
+    return "\n    ".join(re.findall(r"<path[^>]*>(?:</path>)?", svg))
+
+
+def svg(plate: str, *, size: int | None = None) -> str:
+    """The mark, optionally on its plate, as a whole SVG document."""
+    dimensions = f'width="{size}" height="{size}" ' if size else ""
+    tile = ""
+    if plate != NONE:
+        radius = f' rx="{PLATE_RADIUS}"' if plate == ROUNDED else ""
+        tile = f'<rect width="{GRID}" height="{GRID}"{radius} fill="{PLATE}"/>\n  '
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" {dimensions}'
+        f'viewBox="0 0 {GRID} {GRID}">\n  '
+        f"{tile}"
+        f'<g transform="translate({MARK_DX} {MARK_DY}) scale({MARK_SCALE})" '
+        f'fill="none" stroke="{INK}" stroke-width="1.9" '
+        f'stroke-linecap="round" stroke-linejoin="round">\n    '
+        f"{paths()}\n  "
+        f"</g>\n</svg>\n"
+    )
+
+
+def chrome() -> str:
+    for candidate in (
+        os.environ.get("CHROME"),
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "google-chrome",
+        "chromium",
+    ):
+        if candidate and (found := shutil.which(candidate)):
+            return found
+    sys.exit("no Chrome found — set CHROME to the binary")
+
+
+def render(plate: str, size: int, out: Path) -> None:
+    """Rasterize the mark on ``plate`` to a ``size``-square transparent PNG.
+
+    Rendered at its final size rather than large and resampled down: the
+    rasterizer's own antialiasing is crisper than any downsample of it,
+    which small icons need every bit of.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        page = Path(tmp) / "page.html"
+        page.write_text(f'<body style="margin:0">{svg(plate, size=size)}')
+        shot = Path(tmp) / "shot.png"
+        subprocess.run(
+            [
+                chrome(),
+                "--headless",
+                "--disable-gpu",
+                "--hide-scrollbars",
+                "--force-device-scale-factor=1",
+                "--default-background-color=00000000",
+                f"--screenshot={shot}",
+                f"--window-size={size},{size}",
+                str(page),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        Image.open(shot).convert("RGBA").save(out, optimize=True)
+
+
+def main() -> None:
+    (BRAND / "favicon.svg").write_text(svg(ROUNDED, size=GRID))
+    print(f"favicon.svg{'':<20} vector, on the plate")
+    for name, (size, plate) in RASTERS.items():
+        render(plate, size, BRAND / name)
+        print(f"{name:<31} {size}px, plate: {plate}")
+
+
+if __name__ == "__main__":
+    main()

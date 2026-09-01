@@ -5,7 +5,7 @@ from fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import Response
 
-from cervo.web import docs, home, layout, legal, verify
+from cervo.web import brand, docs, home, layout, legal, verify
 
 
 def register(app: FastMCP) -> None:
@@ -45,6 +45,10 @@ def register(app: FastMCP) -> None:
     @app.custom_route("/verify/code", methods=["POST"])
     async def verify_code_route(request: Request) -> Response:
         return await verify.submit_code(request)
+
+    # The icons and the link preview card, at the paths browsers and social
+    # scrapers ask for.
+    brand.register_assets(app)
 
     # The catch-all: keep this registered last, or it eats the pages above.
     @app.custom_route("/{path:path}", methods=["GET"])

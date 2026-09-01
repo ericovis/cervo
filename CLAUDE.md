@@ -76,6 +76,16 @@ Auth has no knobs: token and code lifetimes are private constants in
   worker renders and writes at deploy time. The docs page's illustrations
   (`web/figures.py`) are inline SVG drawn from the same theme tokens — no
   binary assets, no external requests, and they follow the light/dark toggle.
+- `src/cervo/web/brand.py` + `src/cervo/brand/` — the brand: the antler mark,
+  inlined into every header in `currentColor`, and the icon/preview files —
+  the one place cervo serves real assets, since browsers and social scrapers
+  fetch those outside the page render. `web.routes.register` attaches a route
+  per served file ahead of the catch-all, each under its delivered filename
+  (`/favicon.svg`, `/favicon-16.png`, `/favicon-32.png`,
+  `/apple-touch-icon-180.png`, `/og-image-1200x630.png`) — the filename in
+  the URL is what makes a revised card bustable in a scraper's cache. The
+  head tags are prefixed with the page's `base`, so a site's default page
+  points at the apex instead of its own subdomain.
 - `src/cervo/worker.py` — the job worker: polls for due jobs, dispatches them by
   kind (`_HANDLERS`), reaps timed-out ones. Entry point `cervo-worker`.
 - `src/cervo/config.py` — settings (see above)
@@ -105,7 +115,9 @@ Auth has no knobs: token and code lifetimes are private constants in
   (`ENTRYPOINT ["uv", "run"]`)
 - `docker-compose.yml` — the dev environment (see Running);
   `docker-compose.test.yml` — the throwaway test stack (see Tests)
-- `bin/` — the everyday commands: `dev`, `lint`, `test`, `smoke`
+- `bin/` — the everyday commands: `dev`, `lint`, `test`, `smoke`; plus
+  `brand`, which regenerates the icon set from `src/cervo/brand/mark.svg`
+  (needs Chrome; a maintainer's tool, never run by the app, the tests, or CI)
 
 ## Deploying
 

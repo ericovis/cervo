@@ -4,6 +4,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from cervo.server import app
+from cervo.web import site
 from tests.conftest import call, chat, deploy
 
 PAGES = ["/", "/docs", "/terms", "/privacy"]
@@ -80,8 +81,9 @@ def test_the_docs_state_what_can_be_published(client):
 def test_the_docs_illustrate_the_setup(client):
     page = client.get("/docs").text
 
-    # Three drawings, inline and self-contained: no external requests.
-    assert page.count("<svg") == 3
+    # Three drawings, inline and self-contained: no external requests. The
+    # fourth <svg> on the page is the brand mark in the header.
+    assert page.count("<svg") == 4
     assert "<img" not in page
     assert "Add custom connector" in page
     # The dialog figure shows the address the reader has to paste.
@@ -100,3 +102,52 @@ def test_the_catch_all_does_not_shadow_the_mcp_endpoint(client):
     # Not a full MCP handshake — just proof the route is not our 404 page.
     response = client.post("/mcp", json={})
     assert response.status_code != 404
+
+
+@pytest.mark.parametrize("path", PAGES)
+def test_every_page_wears_the_brand(client, path):
+    page = client.get(path).text
+
+    assert 'class="wordmark"' in page
+    assert "<svg" in page  # the mark, inline beside the wordmark
+    assert 'href="/favicon.svg"' in page
+    assert 'href="/apple-touch-icon-180.png"' in page
+    # The preview card's address is absolute: a scraper has nothing to
+    # resolve a relative one against.
+    assert 'content="http://localhost/og-image-1200x630.png"' in page
+    assert 'name="description"' in page
+
+
+def test_the_docs_describe_themselves_in_the_preview(client):
+    page = client.get("/docs").text
+    assert 'property="og:title" content="documentation — cervo"' in page
+    assert "prove your email address" in page
+
+
+BRAND_FILES = {
+    "/favicon.svg": "image/svg+xml",
+    "/favicon-16.png": "image/png",
+    "/favicon-32.png": "image/png",
+    "/apple-touch-icon-180.png": "image/png",
+    "/og-image-1200x630.png": "image/png",
+}
+
+
+@pytest.mark.parametrize("path,media_type", BRAND_FILES.items())
+def test_the_brand_files_are_served(client, path, media_type):
+    response = client.get(path)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith(media_type)
+    assert response.headers["cache-control"] == "public, max-age=86400"
+    assert len(response.content) > 0
+
+
+def test_a_site_page_points_its_brand_at_the_apex():
+    # A relative icon would be looked for on the site's own subdomain, where
+    # nothing serves it.
+    page = site.default_page("demo", "http://demo.localhost", "2026-01-01")
+
+    assert 'href="http://localhost/favicon.svg"' in page
+    assert 'content="http://localhost/og-image-1200x630.png"' in page
+    assert "demo.localhost is live on cervo" in page
