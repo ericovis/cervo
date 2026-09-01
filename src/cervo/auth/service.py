@@ -276,11 +276,20 @@ def load_access(conn: sqlite3.Connection, token: str) -> dict | None:
 
 
 def revoke(conn: sqlite3.Connection, token: str) -> None:
-    """Drop this token; a refresh token takes its whole grant with it."""
+    """Drop this token, and the whole grant it belongs to.
+
+    RFC 7009 lets a client revoke either token type, and either should end
+    the session: the token is resolved to its ``(client_id, user_id)`` grant
+    and every token in it is dropped, so revoking an access token does not
+    leave its never-expiring sibling refresh token alive. A hash matching no
+    live token is simply deleted.
+    """
     token_hash = _hash(token)
-    refresh_row = _dao.get_token(conn, token_hash, "refresh")
-    if refresh_row is not None:
-        _dao.delete_grant_tokens(conn, refresh_row["client_id"], refresh_row["user_id"])
+    row = _dao.get_token(conn, token_hash, "refresh") or _dao.get_token(
+        conn, token_hash, "access"
+    )
+    if row is not None:
+        _dao.delete_grant_tokens(conn, row["client_id"], row["user_id"])
         return
     _dao.delete_token(conn, token_hash)
 

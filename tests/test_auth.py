@@ -3,6 +3,7 @@
 import pytest
 
 from cervo.auth import service
+from cervo.db import connect
 from tests.conftest import OWNER, Flow, call, chat, serving
 
 
@@ -203,6 +204,26 @@ async def test_a_refresh_token_rotates_on_use():
         replay = await flow.refresh(tokens["refresh_token"])
         assert replay.status_code in (400, 401)
         assert replay.json()["error"] == "invalid_grant"
+
+
+async def test_revoking_an_access_token_kills_the_whole_grant():
+    """Revoking either token type ends the session (RFC 7009).
+
+    The access token's never-expiring sibling refresh token must not outlive
+    it — otherwise a client that revoked its access token believing the
+    session was over could refresh straight back in.
+    """
+    async with serving() as web:
+        tokens = await Flow(web).sign_in(OWNER)
+
+    with connect() as conn:
+        assert service.load_access(conn, tokens["access_token"]) is not None
+        assert service.load_refresh(conn, tokens["refresh_token"]) is not None
+
+        service.revoke(conn, tokens["access_token"])
+
+        assert service.load_access(conn, tokens["access_token"]) is None
+        assert service.load_refresh(conn, tokens["refresh_token"]) is None
 
 
 async def test_an_expired_access_token_stops_working(monkeypatch):
