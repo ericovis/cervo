@@ -30,3 +30,7 @@ class Job(BaseModel):
     status: JobStatus = "pending"
     error: str | None = None
     attempts: int = 0
+    # Incremented each time the job is claimed; a worker may only finalize a
+    # job it still holds this generation of, so a reaped-and-reclaimed job
+    # cannot be mutated by the previous (zombie) holder.
+    claims: int = 0

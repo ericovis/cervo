@@ -53,19 +53,24 @@ def claim_due(conn: sqlite3.Connection) -> Job | None:
     return _dao.claim_due(conn, _SERIALIZED)
 
 
-def succeed(conn: sqlite3.Connection, job_id: int) -> Job:
-    """Record that the job finished."""
-    return _dao.mark_done(conn, job_id)
+def succeed(conn: sqlite3.Connection, claimed: Job) -> Job | None:
+    """Record that the job finished. None if its lease was lost meanwhile."""
+    return _dao.mark_done(conn, claimed.id, claimed.claims)
 
 
-def fail(conn: sqlite3.Connection, job_id: int, error: str) -> Job:
-    """Record a failed attempt; the job retries later or ends up failed."""
-    return _dao.record_failure(conn, job_id, error, _MAX_ATTEMPTS, _RETRY_DELAY)
+def fail(conn: sqlite3.Connection, claimed: Job, error: str) -> Job | None:
+    """Record a failed attempt; the job retries later or ends up failed.
+
+    None if the lease was lost to a reap-and-reclaim — the new holder owns it.
+    """
+    return _dao.record_failure(
+        conn, claimed.id, claimed.claims, error, _MAX_ATTEMPTS, _RETRY_DELAY
+    )
 
 
-def fail_permanently(conn: sqlite3.Connection, job_id: int, error: str) -> Job:
-    """Fail the job for good — for failures retrying cannot help."""
-    return _dao.mark_failed(conn, job_id, error)
+def fail_permanently(conn: sqlite3.Connection, claimed: Job, error: str) -> Job | None:
+    """Fail the job for good. None if the lease was lost meanwhile."""
+    return _dao.mark_failed(conn, claimed.id, claimed.claims, error)
 
 
 def reap(conn: sqlite3.Connection) -> int:

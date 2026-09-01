@@ -81,24 +81,38 @@ def run_once() -> bool:
     except job.PermanentError as error:
         _log.warning("job %d (%s) failed for good: %s", claimed.id, claimed.kind, error)
         with connect() as conn:
-            job.fail_permanently(conn, claimed.id, str(error))
-        monitoring.report(error, permanent=True, **_job_context(claimed))
-        _job_event(claimed, "failed", started)
+            outcome = job.fail_permanently(conn, claimed, str(error))
+        if outcome is None:
+            _log.warning("job %d (%s) lease lost; not recorded", claimed.id, claimed.kind)
+        else:
+            monitoring.report(error, permanent=True, **_job_context(claimed))
+            _job_event(claimed, "failed", started)
     except Exception as error:  # noqa: BLE001 — recorded on the job, retried
         _log.warning("job %d (%s) failed: %s", claimed.id, claimed.kind, error)
         with connect() as conn:
-            failed = job.fail(conn, claimed.id, str(error))
-        spent = failed.status == "failed"  # attempts exhausted, no retry coming
-        monitoring.report(error, permanent=spent, **_job_context(claimed))
-        _job_event(claimed, "failed" if spent else "retrying", started)
+            failed = job.fail(conn, claimed, str(error))
+        if failed is None:
+            _log.warning("job %d (%s) lease lost; not recorded", claimed.id, claimed.kind)
+        else:
+            spent = failed.status == "failed"  # attempts exhausted, no retry
+            monitoring.report(error, permanent=spent, **_job_context(claimed))
+            _job_event(claimed, "failed" if spent else "retrying", started)
     else:
         _log.info("job %d (%s) done", claimed.id, claimed.kind)
         with connect() as conn:  # one transaction: a done step and its successor
-            job.succeed(conn, claimed.id)
-            follow_up = _NEXT.get(claimed.kind)
-            if follow_up:
-                job.enqueue(conn, follow_up, claimed.payload)
-        _job_event(claimed, "done", started)
+            done = job.succeed(conn, claimed)
+            if done is not None:
+                follow_up = _NEXT.get(claimed.kind)
+                if follow_up:
+                    job.enqueue(conn, follow_up, claimed.payload)
+        if done is None:
+            _log.warning(
+                "job %d (%s) lease lost; successor not enqueued",
+                claimed.id,
+                claimed.kind,
+            )
+        else:
+            _job_event(claimed, "done", started)
     return True
 
 
