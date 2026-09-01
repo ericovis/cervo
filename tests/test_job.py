@@ -169,9 +169,7 @@ def test_pruning_drops_only_old_terminal_jobs_of_the_named_kinds():
         other = job.enqueue(conn, "tests.keep", {"n": 3})
         # Only `stale` is both terminal and old.
         conn.execute("UPDATE job SET status = 'done'")
-        conn.execute(
-            "UPDATE job SET created_at = 0 WHERE id = ?", (stale.id,)
-        )
+        conn.execute("UPDATE job SET created_at = 0 WHERE id = ?", (stale.id,))
 
     with connect() as conn:
         removed = job.prune(conn, ("tests.bulky",), older_than=3600)
