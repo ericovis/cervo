@@ -139,7 +139,15 @@ async def _follow_deployment(ctx: Context, site: website.Website) -> website.Web
     """Follow the deployment chain, reporting each step as progress."""
 
     def refresh(conn: sqlite3.Connection, current: website.Website) -> website.Website:
-        return website.get(conn, current.slug) or current  # deleted mid-watch
+        site = website.get(conn, current.slug)
+        # A slug deleted (or deleted and re-taken by someone else) mid-watch is
+        # terminal: end the watch rather than adopt a stranger's site or spin
+        # until the deadline narrating a site that is gone.
+        if site is None or site.user_id != current.user_id:
+            return current.model_copy(
+                update={"status": "failed", "error": "the site was deleted"}
+            )
+        return site
 
     return await _follow(ctx, site, refresh, _progress_message, ("live", "failed"))
 
