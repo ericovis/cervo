@@ -1,4 +1,4 @@
-# Cervo
+# cervo
 
 A demo app for managing static website hosting on a shared VPS. It's built as an MCP server ([FastMCP](https://gofastmcp.com), served over HTTP), so the hosting is managed by chatting with an AI: in development, [Claude Code](https://claude.com/claude-code) acts as the chat interface for exercising and testing the server's tools.
 
