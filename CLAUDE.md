@@ -115,7 +115,9 @@ Auth has no knobs: token and code lifetimes are private constants in
   (`ENTRYPOINT ["uv", "run"]`)
 - `docker-compose.yml` — the dev environment (see Running);
   `docker-compose.test.yml` — the throwaway test stack (see Tests)
-- `bin/` — the everyday commands: `dev`, `lint`, `test`, `smoke`
+- `bin/` — the everyday commands: `dev`, `lint`, `test`, `smoke`; plus
+  `brand`, which regenerates the icon set from `src/cervo/brand/mark.svg`
+  (needs Chrome; a maintainer's tool, never run by the app, the tests, or CI)
 
 ## Deploying
 

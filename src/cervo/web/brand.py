@@ -1,5 +1,8 @@
 """cervo's brand: the antler mark, the icons, and the social preview card.
 
+Every icon is one drawing: `bin/brand` generates the whole set from
+`brand/mark.svg`, so the antler exists in exactly one place.
+
 The mark is inlined into every page — it is drawn in ``currentColor``, so it
 follows the theme like everything else and costs no request. The icons and
 the preview card are the one place cervo serves real files: browsers and
@@ -74,8 +77,6 @@ def head_tags(title: str, description: str, base: str):
         Link(
             rel="icon", href=f"{base}/favicon-32.png", type="image/png", sizes="32x32"
         ),
-        # 16px drops the two lower tines — they silt up at that size — for
-        # the same silhouette, still legible.
         Link(
             rel="icon", href=f"{base}/favicon-16.png", type="image/png", sizes="16x16"
         ),
