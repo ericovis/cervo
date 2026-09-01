@@ -55,6 +55,23 @@ def _circle(cx, cy, r, fill):
     return f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="{fill}"/>'
 
 
+def _button(x, y, w, h, label, *, size=12.5, rx=8, fill="none", ink=_ACCENT):
+    """A button: the label centred in its own box, never anchored by hand.
+
+    The baseline sits half a cap-height below the box's middle, which is
+    what makes the text look centred rather than measured-centred.
+    """
+    return _box(x, y, w, h, rx=rx, fill=fill, stroke=_ACCENT) + _text(
+        x + w / 2,
+        y + h / 2 + size * 0.36,
+        label,
+        fill=ink,
+        size=size,
+        weight=600,
+        anchor="middle",
+    )
+
+
 def _arrow(x, y, *, length=26):
     """A short accent arrow pointing right, from ``x`` at height ``y``."""
     tip = x + length
@@ -94,8 +111,7 @@ def connectors_screen():
         _box(200, 148, 416, 42),
         _text(216, 174, "Gmail", fill=_TEXT, size=12),
         _text(600, 174, "Connected", fill=_MUTED, size=11, anchor="end"),
-        _box(200, 216, 236, 40, fill="none", stroke=_ACCENT, width=1.5),
-        _text(318, 241, "+ Add custom connector", fill=_ACCENT, size=12.5, weight=600),
+        _button(200, 216, 236, 40, "+ Add custom connector"),
     ]
     return _figure(
         "Claude's settings, with Connectors selected and the "
@@ -134,8 +150,7 @@ def connector_dialog(mcp_url: str):
         _text(44, 355, "Always required", fill=_INK, size=12.5),
         _path("M244 348 L250 354 L256 348", stroke=_MUTED),
         _text(452, 355, "Cancel", fill=_MUTED, size=12.5, anchor="end"),
-        _box(496, 332, 116, 36, fill=_ACCENT, stroke=_ACCENT),
-        _text(554, 355, "Connect", fill=_BG, size=12.5, weight=600, anchor="middle"),
+        _button(496, 332, 116, 36, "Connect", fill=_ACCENT, ink=_BG),
     ]
     return _figure(
         "The Add custom connector dialog, with cervo's address filled in, "
@@ -156,8 +171,7 @@ def verification_flow():
         _text(18, 92, "YOUR EMAIL", fill=_MUTED, size=9, spacing=1.2),
         _box(18, 100, 154, 30, rx=6),
         _text(30, 120, "you@example.com", fill=_MUTED, size=10.5),
-        _box(18, 144, 112, 30, rx=6, fill="none", stroke=_ACCENT),
-        _text(74, 164, "Send the code", fill=_ACCENT, size=10.5, anchor="middle"),
+        _button(18, 144, 112, 30, "Send the code", size=10.5, rx=6),
         _arrow(196, 105),
         # 2 — the code lands in the inbox.
         _box(225.5, 10, 189, 190, fill=_BG, rx=10),
@@ -190,8 +204,7 @@ def verification_flow():
         _text(468, 92, "THE CODE", fill=_MUTED, size=9, spacing=1.2),
         _box(468, 100, 154, 30, rx=6),
         _text(480, 120, "483921", fill=_INK, size=11.5, spacing=2),
-        _box(468, 144, 82, 30, rx=6, fill=_ACCENT, stroke=_ACCENT),
-        _text(509, 164, "Sign in", fill=_BG, size=10.5, weight=600, anchor="middle"),
+        _button(468, 144, 82, 30, "Sign in", size=10.5, rx=6, fill=_ACCENT, ink=_BG),
         # The captions under each panel.
         _text(95, 226, "1. Type your email", fill=_MUTED, size=11, anchor="middle"),
         _text(320, 226, "2. Read the code", fill=_MUTED, size=11, anchor="middle"),
