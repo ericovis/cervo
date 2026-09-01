@@ -1,6 +1,7 @@
 """Creating and deleting sites, and who is allowed to."""
 
 import sqlite3
+import threading
 from datetime import UTC, datetime
 
 import pytest
@@ -119,6 +120,59 @@ def test_the_service_refuses_a_duplicate_slug():
         website.create(conn, "once", owner)
         with pytest.raises(website.WebsiteError, match="already taken"):
             website.create(conn, "once", someone_else)
+
+
+def _race_to_create(owner, slug, start, results, refusals):
+    """One contender in the create() race: wait at the barrier, then try."""
+    start.wait()
+    try:
+        with connect() as conn:
+            results[owner.email] = website.create(conn, slug, owner).user_id
+    except website.WebsiteError as error:
+        refusals.append(str(error))
+
+
+def test_racing_creators_never_share_ownership_of_a_slug():
+    """Two accounts creating the same fresh slug at once: one wins cleanly.
+
+    The insert is the atomic decision point, so however the two threads
+    interleave, exactly one create() succeeds and the database row belongs
+    to that winner — the loser is refused, never silently made co-owner or
+    handed the slug. (With the old ownership-transferring upsert, the loser's
+    write reassigned the row and both calls "succeeded".)
+    """
+    with connect() as conn:
+        alice = user.ensure(conn, "alice@example.com")
+        bob = user.ensure(conn, "bob@example.com")
+
+    for _ in range(50):
+        with connect() as conn:
+            conn.execute("DELETE FROM website")
+            conn.execute("DELETE FROM job")
+
+        results: dict[str, int] = {}
+        refusals: list[str] = []
+        start = threading.Barrier(2)
+        threads = [
+            threading.Thread(
+                target=_race_to_create,
+                args=(owner, "contested", start, results, refusals),
+            )
+            for owner in (alice, bob)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT user_id FROM website WHERE slug = ?", ("contested",)
+            ).fetchone()
+
+        assert len(results) == 1, "exactly one creator may succeed"
+        assert len(refusals) == 1 and "already taken" in refusals[0]
+        assert row["user_id"] == next(iter(results.values())), "winner owns the row"
 
 
 def test_a_reserved_slug_is_refused():
