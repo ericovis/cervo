@@ -15,6 +15,7 @@ announced.
 """
 
 import sqlite3
+from urllib.parse import urlsplit
 
 from fastmcp.server.auth import AccessToken, OAuthProvider
 from fastmcp.server.auth.cimd import CIMDClientManager
@@ -23,6 +24,7 @@ from mcp.server.auth.provider import (
     AuthorizationCode,
     AuthorizationParams,
     RefreshToken,
+    RegistrationError,
     TokenError,
 )
 from mcp.server.auth.routes import build_metadata, cors_middleware
@@ -32,6 +34,28 @@ from starlette.routing import Route
 
 from cervo import config, db
 from cervo.auth import service
+
+# Only Claude may connect for now. Every Claude client reaches cervo through one
+# of these callbacks, so any other is refused — closing the confused-deputy
+# where someone registers a client (or hosts a metadata document) pointing at
+# their own server and phishes a victim through the genuine sign-in. To admit
+# another provider later (ChatGPT, Gemini), add its callback and CIMD hosts.
+#   - Claude Code self-registers (DCR) with an ephemeral loopback callback; a
+#     loopback code can only ever reach the user's own machine, never a remote
+#     attacker.
+#   - claude.ai / Desktop call back to https://claude.ai/api/mcp/auth_callback.
+#   - CIMD metadata documents (e.g. Claude Code's) are served from claude.ai.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+_ALLOWED_REDIRECT_HOSTS = frozenset({"claude.ai"})
+_ALLOWED_CIMD_HOSTS = frozenset({"claude.ai"})
+
+
+def _redirect_allowed(redirect_uri: object) -> bool:
+    """Whether cervo will send an authorization code to this callback."""
+    parts = urlsplit(str(redirect_uri))
+    if parts.hostname in _LOOPBACK_HOSTS:
+        return True  # only the user's own machine can receive a loopback code
+    return parts.scheme == "https" and parts.hostname in _ALLOWED_REDIRECT_HOSTS
 
 
 class CervoOAuthProvider(OAuthProvider):
@@ -49,6 +73,10 @@ class CervoOAuthProvider(OAuthProvider):
 
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
         if self._cimd.is_cimd_client_id(client_id):
+            # Any https URL is a CIMD client_id, so gate on the host: a metadata
+            # document served from anywhere but Claude is refused, not fetched.
+            if urlsplit(client_id).hostname not in _ALLOWED_CIMD_HOSTS:
+                return None
             return await self._cimd.get_client(client_id)
         data = await db.transact(lambda conn: service.get_client(conn, client_id))
         if data is None:
@@ -56,6 +84,15 @@ class CervoOAuthProvider(OAuthProvider):
         return OAuthClientInformationFull.model_validate_json(data)
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
+        # Refuse any self-registering client whose callback is not Claude's, so
+        # a code can never be delivered to an attacker-controlled endpoint.
+        uris = client_info.redirect_uris or []
+        if not uris or not all(_redirect_allowed(uri) for uri in uris):
+            raise RegistrationError(
+                "invalid_redirect_uri",
+                "cervo accepts only Claude clients: a loopback callback "
+                "(Claude Code) or an https://claude.ai/ callback.",
+            )
         await db.transact(
             lambda conn: service.save_client(
                 conn, client_info.client_id, client_info.model_dump_json()

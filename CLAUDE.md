@@ -167,6 +167,17 @@ mounts the endpoints (`/.well-known/*`, `/authorize`, `/token`, `/register`,
 rebuilt there to advertise CIMD, so Claude's "hosted client metadata"
 (client_id = an Anthropic-hosted URL) works as well as plain DCR.
 
+For now cervo is Claude-only, enforced in `CervoOAuthProvider` so it cannot
+be turned into a confused-deputy for an attacker's client: `register_client`
+accepts a self-registering (DCR) client only when every `redirect_uri` is a
+loopback callback (Claude Code's ephemeral `http://localhost:PORT/callback`)
+or `https://claude.ai/...`, and `get_client` honours a CIMD `client_id` only
+when its document host is `claude.ai`. Everything else is refused — a loopback
+code only ever reaches the user's own machine, and no attacker controls
+`claude.ai`. Admitting another provider (ChatGPT, Gemini) later is a matter of
+adding its callback and CIMD hosts to the allowlists at the top of
+`auth/provider.py`.
+
 `/authorize` parks the request as a transaction and redirects the browser to
 `/verify` (`web/verify.py`): the user enters an email, a six-digit code is
 mailed, and typing it back ends with a redirect to Claude's callback carrying
