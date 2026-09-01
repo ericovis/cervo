@@ -217,7 +217,7 @@ def _footer(base: str):
     return Section(
         H2("ABOUT CERVO"),
         P(
-            A("Cervo", href="https://github.com/ericovis/cervo"),
+            A("cervo", href="https://github.com/ericovis/cervo"),
             " is a demo app for managing static website hosting on a shared "
             "VPS, created by Eric Magalhães a.k.a. ",
             A("ericovis", href="https://github.com/ericovis"),
