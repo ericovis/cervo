@@ -1,4 +1,4 @@
-# Cervo
+# cervo
 
 A demo app for managing static website hosting on a shared VPS, built as an MCP server with [FastMCP](https://gofastmcp.com). Claude Code is the AI/chat interface used to exercise and test the server's tools during development. The whole environment — dev and production alike — runs from docker-compose: caddy is the front door, a worker process runs deployments, and mailcatcher stands in for SMTP in development.
 
@@ -160,7 +160,7 @@ the kind declares it at import time.
 
 ## Authentication
 
-Cervo is its own OAuth 2.1 authorization server; connecting it as a claude.ai
+cervo is its own OAuth 2.1 authorization server; connecting it as a claude.ai
 custom connector (authentication: required) is the only sign-in. FastMCP
 mounts the endpoints (`/.well-known/*`, `/authorize`, `/token`, `/register`,
 `/revoke`) from `auth/provider.py`'s `CervoOAuthProvider`; the metadata is

@@ -1,6 +1,6 @@
 """Shapes for the OAuth authorization server.
 
-Cervo is its own authorization server: connecting the claude.ai connector
+cervo is its own authorization server: connecting the claude.ai connector
 runs a browser flow where the user proves control of an email address, and
 every MCP request afterwards carries a Bearer token minted here. A
 :class:`Transaction` is one in-flight authorize request — everything from the

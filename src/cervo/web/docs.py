@@ -19,7 +19,7 @@ def docs_page() -> HTMLResponse:
         *layout.hero(
             "● DOCUMENTATION",
             "How to use cervo",
-            "Cervo has no dashboard and no password. You add it to Claude "
+            "cervo has no dashboard and no password. You add it to Claude "
             "once, prove your email address, and from then on you make "
             "websites by asking for them.",
         ),
@@ -42,7 +42,7 @@ def docs_page() -> HTMLResponse:
         layout.section(
             "STEP ONE — ADD CERVO TO CLAUDE",
             P(
-                "Cervo is a ",
+                "cervo is a ",
                 Strong("connector"),
                 ": a tool you hand to Claude once, so that Claude can host "
                 "websites on your behalf. Adding it takes about a minute, "
@@ -130,7 +130,7 @@ def docs_page() -> HTMLResponse:
             "STEP TWO — PROVE YOUR EMAIL",
             P(
                 "There is no account to create and no password to choose. "
-                "Cervo simply mails you a six-digit code and asks you to "
+                "cervo simply mails you a six-digit code and asks you to "
                 "type it back. The address you verify is the one that owns "
                 "your websites."
             ),
@@ -163,7 +163,7 @@ def docs_page() -> HTMLResponse:
                 cls="note",
             ),
             P(
-                "Cervo will never ask you for that code in the chat, only "
+                "cervo will never ask you for that code in the chat, only "
                 "on its own page. From then on the connection keeps itself "
                 "signed in — you will not be asked again. That page is also "
                 "where you accept the ",
@@ -217,7 +217,7 @@ def docs_page() -> HTMLResponse:
         layout.section(
             "WHAT CERVO ACCEPTS",
             P(
-                "Cervo hosts plain static pages, and it is strict about "
+                "cervo hosts plain static pages, and it is strict about "
                 "what goes on them: ",
                 Strong("only .html and .css files can be published"),
                 ". A file with any other extension is refused before it is "

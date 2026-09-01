@@ -1,4 +1,4 @@
-"""Cervo as an OAuth authorization server, plugged into FastMCP.
+"""cervo as an OAuth authorization server, plugged into FastMCP.
 
 This is the adapter between the MCP SDK's authorization-server protocol and
 the service: FastMCP mounts the ``/.well-known`` metadata, ``/authorize``,

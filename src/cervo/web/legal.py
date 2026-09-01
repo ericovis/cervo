@@ -18,7 +18,7 @@ def terms_page() -> HTMLResponse:
         layout.section(
             "THE SERVICE",
             P(
-                "Cervo is a demo of static website hosting managed through "
+                "cervo is a demo of static website hosting managed through "
                 "an AI conversation. It is provided as-is and as-available, "
                 "with no warranty of any kind and no guarantees of uptime, "
                 "durability, or backups. The service may change or shut "
@@ -61,7 +61,7 @@ def privacy_page() -> HTMLResponse:
             P(
                 "No analytics, no tracking, no cookies. The only thing "
                 "kept in your browser is your theme preference, stored "
-                "locally and never sent anywhere. Cervo emails you nothing "
+                "locally and never sent anywhere. cervo emails you nothing "
                 "but sign-in codes, and your address is not shared."
             ),
         ),

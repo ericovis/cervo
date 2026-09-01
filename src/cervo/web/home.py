@@ -15,7 +15,7 @@ async def home_page() -> HTMLResponse:
         *layout.hero(
             "● OPEN",
             "Host a site by asking for it",
-            "Cervo hosts static websites on a shared VPS. There is no "
+            "cervo hosts static websites on a shared VPS. There is no "
             "dashboard and no server to log into — you create and update "
             "a site by talking to an AI.",
         ),

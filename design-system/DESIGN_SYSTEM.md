@@ -1,4 +1,4 @@
-# Cervo design system — "deploy receipt"
+# cervo design system — "deploy receipt"
 
 Terminal-receipt aesthetic for all cervo-served pages (default index, future error pages, listings). Monospace throughout, one amber accent, warm-dark base with a paper-light variant. Zero external requests: system fonts only, styles inline in each page.
 
