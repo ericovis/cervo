@@ -3,14 +3,13 @@
 from fasthtml.common import A, P
 from starlette.responses import HTMLResponse
 
-from cervo import config, db, website
+from cervo import db, website
 from cervo.web import layout
 
 
 async def home_page() -> HTMLResponse:
     sites = await db.transact(website.live)
 
-    mcp_url = f"{config.origin()}/mcp"
     return layout.page(
         "cervo — static hosting",
         *layout.hero(
@@ -22,18 +21,12 @@ async def home_page() -> HTMLResponse:
         ),
         layout.section(
             "GET STARTED",
-            P("Point your AI tool of choice at cervo's MCP server:"),
-            layout.endpoint_chip(mcp_url),
             P(
-                "Signing in happens when you connect: your browser opens "
-                "cervo's sign-in page, and the email you verify there owns "
-                "your sites. Then just ask:"
+                "You add cervo to Claude once, prove your email address, and "
+                "from then on you make websites by asking for them. The ",
+                A("documentation", href="/docs"),
+                " walks through every step, with pictures.",
             ),
-            layout.prompts(
-                "Create a website called my-cool-site",
-                f"Upload my files to my-cool-site.{config.DOMAIN}",
-            ),
-            P("Curious about the details? ", A("Read the docs", href="/docs"), "."),
         ),
         layout.section("SITES ON CERVO", *_catalog(sites)),
     )

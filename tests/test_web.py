@@ -27,9 +27,11 @@ def test_every_page_is_served_on_the_design_system(client, path):
     assert "--accent" in response.text  # the design system's token block
 
 
-def test_the_homepage_points_at_the_mcp_endpoint(client):
+def test_the_homepage_sends_people_to_the_docs(client):
+    # Setup lives in one place: the homepage points, the docs explain.
     page = client.get("/").text
-    assert "http://localhost/mcp" in page
+    assert 'href="/docs"' in page
+    assert "http://localhost/mcp" not in page
 
 
 def test_the_catalog_starts_empty(client):
