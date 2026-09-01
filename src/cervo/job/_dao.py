@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS job (
     status TEXT NOT NULL DEFAULT 'pending',
     error TEXT,
     attempts INTEGER NOT NULL DEFAULT 0,
+    claims INTEGER NOT NULL DEFAULT 0,
     timeout INTEGER NOT NULL,
     next_attempt_at REAL,
     times_out_at REAL,
@@ -49,7 +50,7 @@ RETURNING *
 # across any number of workers.
 _CLAIM_DUE = """
 UPDATE job
-SET status = 'running', times_out_at = :now + timeout
+SET status = 'running', times_out_at = :now + timeout, claims = claims + 1
 WHERE id = (
     SELECT id FROM job
     WHERE status = 'pending'
@@ -67,17 +68,21 @@ WHERE id = (
 RETURNING *
 """
 
+# Finalizers only touch a job the caller still holds — running, and the same
+# claim generation it was handed. A job reaped and reclaimed meanwhile matches
+# neither, so the previous (zombie) holder updates nothing and learns it lost
+# the lease from the empty result.
 _MARK_DONE = """
 UPDATE job
 SET status = 'done', error = NULL, times_out_at = NULL
-WHERE id = ?
+WHERE id = :id AND status = 'running' AND claims = :claims
 RETURNING *
 """
 
 _MARK_FAILED = """
 UPDATE job
 SET status = 'failed', error = :error, times_out_at = NULL, next_attempt_at = NULL
-WHERE id = :id
+WHERE id = :id AND status = 'running' AND claims = :claims
 RETURNING *
 """
 
@@ -92,7 +97,7 @@ SET attempts = attempts + 1,
     next_attempt_at = CASE
         WHEN attempts + 1 >= :max_attempts THEN NULL ELSE :now + :retry_delay
     END
-WHERE id = :id
+WHERE id = :id AND status = 'running' AND claims = :claims
 RETURNING *
 """
 
@@ -144,6 +149,10 @@ def create_tables(conn: sqlite3.Connection) -> None:
     """Create the job table and its index if they do not exist yet."""
     conn.execute(_CREATE_TABLE)
     conn.execute(_CREATE_WORK_INDEX)
+    # Bring a table created before the claim-generation column up to date.
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(job)")}
+    if "claims" not in columns:
+        conn.execute("ALTER TABLE job ADD COLUMN claims INTEGER NOT NULL DEFAULT 0")
 
 
 def insert(
@@ -174,36 +183,46 @@ def claim_due(conn: sqlite3.Connection, serialized: Collection[str] = ()) -> Job
     return _from_row(row) if row else None
 
 
-def mark_done(conn: sqlite3.Connection, job_id: int) -> Job:
-    """Record that the job finished successfully."""
-    return _from_row(conn.execute(_MARK_DONE, (job_id,)).fetchone())
+def mark_done(conn: sqlite3.Connection, job_id: int, claims: int) -> Job | None:
+    """Record that the job finished. None if the lease was already lost."""
+    row = conn.execute(_MARK_DONE, {"id": job_id, "claims": claims}).fetchone()
+    return _from_row(row) if row else None
 
 
-def mark_failed(conn: sqlite3.Connection, job_id: int, error: str) -> Job:
-    """Fail the job for good, no matter how many attempts remain."""
-    row = conn.execute(_MARK_FAILED, {"id": job_id, "error": error}).fetchone()
-    return _from_row(row)
+def mark_failed(
+    conn: sqlite3.Connection, job_id: int, claims: int, error: str
+) -> Job | None:
+    """Fail the job for good. None if the lease was already lost."""
+    row = conn.execute(
+        _MARK_FAILED, {"id": job_id, "claims": claims, "error": error}
+    ).fetchone()
+    return _from_row(row) if row else None
 
 
 def record_failure(
     conn: sqlite3.Connection,
     job_id: int,
+    claims: int,
     error: str,
     max_attempts: int,
     retry_delay: int,
-) -> Job:
-    """Count a failed attempt: schedule a retry, or give up at the limit."""
+) -> Job | None:
+    """Count a failed attempt: schedule a retry, or give up at the limit.
+
+    None if the lease was already lost to a reap-and-reclaim.
+    """
     row = conn.execute(
         _RECORD_FAILURE,
         {
             "id": job_id,
+            "claims": claims,
             "error": error,
             "max_attempts": max_attempts,
             "retry_delay": retry_delay,
             "now": _now(),
         },
     ).fetchone()
-    return _from_row(row)
+    return _from_row(row) if row else None
 
 
 def reap(conn: sqlite3.Connection, max_attempts: int, retry_delay: int) -> int:

@@ -56,7 +56,7 @@ def test_succeeding_marks_the_job_done():
     enqueued()
     with connect() as conn:
         claimed = job.claim_due(conn)
-        done = job.succeed(conn, claimed.id)
+        done = job.succeed(conn, claimed)
 
     assert done.status == "done"
     assert done.error is None
@@ -66,7 +66,7 @@ def test_a_failed_job_waits_before_it_is_due_again():
     enqueued()
     with connect() as conn:
         claimed = job.claim_due(conn)
-        failed = job.fail(conn, claimed.id, "boom")
+        failed = job.fail(conn, claimed, "boom")
 
     assert failed.status == "pending"
     assert failed.attempts == 1
@@ -89,7 +89,7 @@ def test_a_job_out_of_attempts_fails_for_good():
             claimed = job.claim_due(conn)
             if claimed is None:
                 break
-            last = job.fail(conn, claimed.id, "boom")
+            last = job.fail(conn, claimed, "boom")
 
     assert last.status == "failed"
     assert last.id == queued.id
@@ -129,6 +129,36 @@ def test_reaping_respects_the_attempt_limit():
         row = conn.execute("SELECT * FROM job").fetchone()
     assert row["status"] == "failed"
     assert row["error"] == "timed out"
+
+
+def test_a_zombie_cannot_finalize_a_reclaimed_job():
+    """A job reaped and re-claimed cannot be mutated by its previous holder.
+
+    Worker A claims a job and stalls; the reaper re-pends it and worker B
+    claims it. A's late succeed()/fail() must no-op (return None) because it no
+    longer holds the current claim generation — so it cannot flip B's job to
+    done or enqueue a duplicate successor.
+    """
+    enqueued()
+    with connect() as conn:
+        a = job.claim_due(conn)  # worker A
+
+    backdate("times_out_at")
+    with connect() as conn:
+        assert job.reap(conn) == 1  # A presumed dead, job pending again
+
+    backdate("next_attempt_at")
+    with connect() as conn:
+        b = job.claim_due(conn)  # worker B takes it
+    assert b is not None and b.id == a.id and b.claims > a.claims
+
+    with connect() as conn:
+        assert job.succeed(conn, a) is None  # A's stale success is refused
+        assert job.fail(conn, a, "late") is None
+        # B still owns it and can finalize normally.
+        assert job.succeed(conn, b) is not None
+        row = conn.execute("SELECT status FROM job WHERE id = ?", (b.id,)).fetchone()
+    assert row["status"] == "done"
 
 
 def test_latest_matches_the_exact_kind_and_payload():
@@ -172,7 +202,7 @@ def test_a_serialized_kind_flows_again_once_the_runner_settles():
     with connect() as conn:
         running = job.claim_due(conn)
         assert running is not None
-        job.succeed(conn, running.id)
+        job.succeed(conn, running)
 
     with connect() as conn:
         claimed = job.claim_due(conn)
