@@ -12,7 +12,7 @@ yet?", "timed out?" — stays in SQL. The payload is stored as canonical JSON
 import json
 import sqlite3
 import time
-from collections.abc import Collection, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from cervo.job.types import Job
@@ -44,10 +44,12 @@ RETURNING *
 """
 
 # A single statement, so a job can never be claimed twice; the deadline is
-# stamped from the job's own timeout as it starts running. Kinds named in
-# :serialized (a JSON array) are claimable only while no job of the same
-# kind is running — one statement is also what makes "one at a time" hold
-# across any number of workers.
+# stamped from the job's own timeout as it starts running. :groups is a JSON
+# object mapping each serialized kind to its group; a due job of a serialized
+# kind is claimable only while no job sharing its group is running — one
+# statement is what makes "one at a time" hold across any number of workers,
+# and grouping is what lets several kinds (the Caddyfile writers) take turns
+# with each other rather than only with their own kind.
 _CLAIM_DUE = """
 UPDATE job
 SET status = 'running', times_out_at = :now + timeout, claims = claims + 1
@@ -56,10 +58,12 @@ WHERE id = (
     WHERE status = 'pending'
       AND (next_attempt_at IS NULL OR next_attempt_at <= :now)
       AND (
-        kind NOT IN (SELECT value FROM json_each(:serialized))
+        kind NOT IN (SELECT key FROM json_each(:groups))
         OR NOT EXISTS (
             SELECT 1 FROM job AS other
-            WHERE other.status = 'running' AND other.kind = job.kind
+            WHERE other.status = 'running'
+              AND (SELECT value FROM json_each(:groups) WHERE key = other.kind)
+                = (SELECT value FROM json_each(:groups) WHERE key = job.kind)
         )
       )
     ORDER BY id
@@ -171,14 +175,18 @@ def insert(
     return _from_row(row)
 
 
-def claim_due(conn: sqlite3.Connection, serialized: Collection[str] = ()) -> Job | None:
+def claim_due(
+    conn: sqlite3.Connection, groups: Mapping[str, str] | None = None
+) -> Job | None:
     """Take the oldest due pending job and mark it running, atomically.
 
-    A due job whose kind is in ``serialized`` is skipped while another job
-    of the same kind is running; every other kind keeps flowing around it.
+    ``groups`` maps each serialized kind to its group; a due job of a
+    serialized kind is skipped while another job in the same group is running,
+    while every non-serialized kind keeps flowing around it.
     """
     row = conn.execute(
-        _CLAIM_DUE, {"now": _now(), "serialized": json.dumps(sorted(serialized))}
+        _CLAIM_DUE,
+        {"now": _now(), "groups": json.dumps(dict(groups or {}), sort_keys=True)},
     ).fetchone()
     return _from_row(row) if row else None
 

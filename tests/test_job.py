@@ -193,6 +193,27 @@ def test_a_serialized_kind_waits_while_one_of_it_runs():
         assert job.claim_due(conn) is None
 
 
+def test_a_group_serializes_several_kinds_against_each_other():
+    """Kinds sharing a group take turns with each other, not just themselves.
+
+    This is what keeps the Caddyfile writers (configure/activate/delete) from
+    running two at once and clobbering each other's snapshot.
+    """
+    job.serialize("tests.group-a", "shared")
+    job.serialize("tests.group-b", "shared")
+    with connect() as conn:
+        first = job.enqueue(conn, "tests.group-a", {})
+        job.enqueue(conn, "tests.group-b", {})
+
+    with connect() as conn:
+        running = job.claim_due(conn)
+    assert running is not None and running.id == first.id
+
+    # The other kind shares the group, so it waits while the first one runs.
+    with connect() as conn:
+        assert job.claim_due(conn) is None
+
+
 def test_a_serialized_kind_flows_again_once_the_runner_settles():
     job.serialize("tests.turn-taker")
     with connect() as conn:

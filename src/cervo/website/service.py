@@ -33,10 +33,13 @@ _STEP_LABELS = {
 }
 
 # The Caddyfile and caddy itself are shared by every site, so the jobs that
-# rewrite or reload them run one at a time, however many workers there are.
-job.serialize(CONFIGURE_KIND)
-job.serialize(ACTIVATE_KIND)
-job.serialize(DELETE_KIND)
+# rewrite or reload them run one at a time — as a group, so a delete can never
+# render its stale snapshot over a configure that just added another site,
+# however many workers there are.
+_CADDYFILE_GROUP = "caddyfile"
+job.serialize(CONFIGURE_KIND, _CADDYFILE_GROUP)
+job.serialize(ACTIVATE_KIND, _CADDYFILE_GROUP)
+job.serialize(DELETE_KIND, _CADDYFILE_GROUP)
 
 # Writing a file into a site is its own chain, so it can grow more steps
 # (a virus scan, say) without touching the queue machinery.

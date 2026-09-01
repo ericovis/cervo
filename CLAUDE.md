@@ -156,7 +156,12 @@ background work reuses the same queue, retry, and timeout machinery. Timestamps
 and payload serialization never leave its `_dao`. A kind can be declared
 one-at-a-time with `job.serialize(kind)` — enforced in the claim statement
 itself, so it holds across any number of worker processes; the domain owning
-the kind declares it at import time.
+the kind declares it at import time. `job.serialize(kind, group)` puts several
+kinds in one group so they take turns with *each other*, not just with their
+own kind — how the three Caddyfile kinds are kept from ever running two at
+once. A claimed job also carries a `claims` generation, bumped on every claim,
+that its worker must still hold to finalize it — so a job reaped after a
+timeout and reclaimed by another worker cannot be mutated by the first.
 
 ## Authentication
 
@@ -205,8 +210,10 @@ from the database, and `website.activate` POSTs it to caddy's `/load` admin
 endpoint. Every step is idempotent, so retrying is always safe — and only the
 failed step retries, not the whole chain. The steps that rewrite or reload
 the shared Caddyfile (`website.configure`, `website.activate`,
-`website.delete`) are serialized — at most one of each kind runs at a time,
-however many workers there are — while other kinds keep flowing around them.
+`website.delete`) are serialized as one group — at most one of the three runs
+at a time, however many workers there are — so a delete cannot render its
+stale snapshot over a configure that just added another site, while other
+kinds keep flowing around them.
 
 Because the deployment is now stepwise, a site also reports `step`,
 `steps_done`, and `steps_total`, and `create_website` streams real-time
