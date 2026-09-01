@@ -175,6 +175,20 @@ def test_racing_creators_never_share_ownership_of_a_slug():
         assert row["user_id"] == next(iter(results.values())), "winner owns the row"
 
 
+def test_a_user_cannot_exceed_their_site_quota(monkeypatch):
+    monkeypatch.setattr(website.service, "_MAX_SITES_PER_USER", 2)
+    with connect() as conn:
+        owner = user.ensure(conn, OWNER)
+        website.create(conn, "one", owner)
+        website.create(conn, "two", owner)
+        with pytest.raises(website.WebsiteError, match="at most 2 sites"):
+            website.create(conn, "three", owner)
+        assert not website.exists(conn, "three")  # the over-quota row was rolled back
+        # Re-deploying a site they already own is never blocked by the quota.
+        conn.execute("UPDATE job SET status = 'failed' WHERE payload LIKE '%\"one\"%'")
+        website.create(conn, "one", owner)
+
+
 def test_a_reserved_slug_is_refused():
     with connect() as conn:
         owner = user.ensure(conn, OWNER)

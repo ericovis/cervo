@@ -205,6 +205,18 @@ async def test_a_stale_write_retry_does_not_revert_a_newer_write(data_dir):
     assert "supersede" in stale.error
 
 
+def test_a_site_cannot_exceed_its_file_quota(data_dir, monkeypatch):
+    monkeypatch.setattr(website.service, "_MAX_FILES_PER_SITE", 1)
+    created("mysite")
+    deploy()  # provisions the default index.html — one file
+    with connect() as conn:
+        owner = user.ensure(conn, OWNER)
+        with pytest.raises(website.WebsiteError, match="can hold at most 1"):
+            website.submit_file(conn, "mysite", "extra.html", HTML, owner)
+        # Overwriting an existing file adds none, so it is still allowed.
+        website.submit_file(conn, "mysite", "index.html", HTML, owner)
+
+
 async def test_the_owner_can_replace_the_default_page(data_dir):
     created("mysite")
     deploy()

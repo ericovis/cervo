@@ -38,6 +38,8 @@ _EXISTS = "SELECT 1 FROM website WHERE slug = ?"
 
 _FOR_USER = "SELECT * FROM website WHERE user_id = ? ORDER BY slug"
 
+_COUNT_FOR_USER = "SELECT count(*) AS c FROM website WHERE user_id = ?"
+
 _ALL = "SELECT * FROM website ORDER BY slug"
 
 _ROUTES = """
@@ -92,6 +94,11 @@ def for_user(conn: sqlite3.Connection, user_id: int) -> list[Website]:
     """Every site this user owns, oldest slug first alphabetically."""
     rows = conn.execute(_FOR_USER, (user_id,)).fetchall()
     return [Website(**row) for row in rows]
+
+
+def count_for_user(conn: sqlite3.Connection, user_id: int) -> int:
+    """How many sites this user owns."""
+    return conn.execute(_COUNT_FOR_USER, (user_id,)).fetchone()["c"]
 
 
 def all_sites(conn: sqlite3.Connection) -> list[Website]:

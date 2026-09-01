@@ -223,6 +223,38 @@ def latest_of(
     return _from_row(row) if row else None
 
 
+def latest_of_grouped(
+    conn: sqlite3.Connection, kinds: Sequence[str], field: str, values: Sequence[str]
+) -> dict[str, Job]:
+    """The newest job among ``kinds`` for each value of payload ``field``.
+
+    One query instead of one per value — the caller (e.g. listing every site
+    with its latest deployment) would otherwise fan out into an N+1. ``field``
+    is a payload key supplied by code, never user input.
+    """
+    if not values:
+        return {}
+    if not field.isidentifier():  # defensive: field is always a code constant
+        raise ValueError(f"unsafe payload field {field!r}")
+    path = f"$.{field}"
+    kinds_ph = ",".join("?" * len(kinds))
+    values_ph = ",".join("?" * len(values))
+    query = f"""
+        SELECT job.* FROM job JOIN (
+            SELECT MAX(id) AS id FROM job
+            WHERE kind IN ({kinds_ph})
+              AND json_extract(payload, '{path}') IN ({values_ph})
+            GROUP BY json_extract(payload, '{path}')
+        ) newest ON job.id = newest.id
+    """
+    rows = conn.execute(query, (*kinds, *values)).fetchall()
+    grouped = {}
+    for row in rows:
+        found = _from_row(row)
+        grouped[found.payload[field]] = found
+    return grouped
+
+
 def newest_id(
     conn: sqlite3.Connection, kinds: Sequence[str], match: dict[str, Any]
 ) -> int | None:
