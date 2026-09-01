@@ -17,9 +17,10 @@ _MAX_ATTEMPTS = 3
 _RETRY_DELAY = 30  # seconds before a failed job is due again
 _DEFAULT_TIMEOUT = 300  # seconds a job may run before it is presumed dead
 
-# Kinds declared one-at-a-time (see serialize). Filled at import time by the
-# domains that own the kinds, so every claimer enforces the same rule.
-_SERIALIZED: set[str] = set()
+# Each serialized kind mapped to its group (see serialize). Filled at import
+# time by the domains that own the kinds, so every claimer enforces the same
+# rule.
+_SERIAL_GROUPS: dict[str, str] = {}
 
 
 def create_tables(conn: sqlite3.Connection) -> None:
@@ -37,20 +38,23 @@ def enqueue(
     return _dao.insert(conn, kind, payload, timeout)
 
 
-def serialize(kind: str) -> None:
+def serialize(kind: str, group: str | None = None) -> None:
     """Have jobs of ``kind`` run one at a time, even across many workers.
 
     For work every job of the kind shares — a file they all rewrite, an API
     they all reload — where two at once would trample each other. A due job
-    of a serialized kind stays pending while another of the same kind runs;
-    every other kind keeps flowing around it.
+    of a serialized kind stays pending while another job in its ``group``
+    runs; every non-serialized kind keeps flowing around it. ``group``
+    defaults to the kind itself (serialized only against its own kind); pass a
+    shared group name to serialize several kinds against one another — e.g.
+    every kind that touches one shared file.
     """
-    _SERIALIZED.add(kind)
+    _SERIAL_GROUPS[kind] = group or kind
 
 
 def claim_due(conn: sqlite3.Connection) -> Job | None:
     """Take one due job and mark it running. None means nothing is due."""
-    return _dao.claim_due(conn, _SERIALIZED)
+    return _dao.claim_due(conn, _SERIAL_GROUPS)
 
 
 def succeed(conn: sqlite3.Connection, claimed: Job) -> Job | None:
