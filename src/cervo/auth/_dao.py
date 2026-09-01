@@ -62,6 +62,16 @@ CREATE TABLE IF NOT EXISTS auth_token (
 )
 """
 
+# How many verification codes have gone to one address in the current rolling
+# window — so cervo cannot be driven to flood an arbitrary inbox.
+_CREATE_THROTTLE_TABLE = """
+CREATE TABLE IF NOT EXISTS mail_throttle (
+    address TEXT PRIMARY KEY,
+    window_start REAL NOT NULL,
+    count INTEGER NOT NULL
+)
+"""
+
 # From the in-chat sign-in eras; databases created back then still carry them.
 _DROP_LEGACY = (
     "DROP TABLE IF EXISTS auth_session",
@@ -149,6 +159,7 @@ def create_tables(conn: sqlite3.Connection) -> None:
     conn.execute(_CREATE_TXN_TABLE)
     conn.execute(_CREATE_CODE_TABLE)
     conn.execute(_CREATE_TOKEN_TABLE)
+    conn.execute(_CREATE_THROTTLE_TABLE)
     for statement in _DROP_LEGACY:
         conn.execute(statement)
 
@@ -240,3 +251,35 @@ def delete_token(conn: sqlite3.Connection, token_hash: str) -> bool:
 def delete_grant_tokens(conn: sqlite3.Connection, client_id: str, user_id: int) -> None:
     """Drop every token this client holds for this user — a full revocation."""
     conn.execute(_DELETE_GRANT_TOKENS, (client_id, user_id))
+
+
+def active_send_count(
+    conn: sqlite3.Connection, address: str, now: float, window: float
+) -> int:
+    """Codes sent to this address in the current window, 0 once it lapses."""
+    row = conn.execute(
+        "SELECT window_start, count FROM mail_throttle WHERE address = ?", (address,)
+    ).fetchone()
+    if row is None or now - row["window_start"] >= window:
+        return 0
+    return row["count"]
+
+
+def record_send(
+    conn: sqlite3.Connection, address: str, now: float, window: float
+) -> None:
+    """Count one code sent to this address, rolling the window when it lapses."""
+    row = conn.execute(
+        "SELECT window_start FROM mail_throttle WHERE address = ?", (address,)
+    ).fetchone()
+    if row is None or now - row["window_start"] >= window:
+        conn.execute(
+            "INSERT INTO mail_throttle (address, window_start, count) "
+            "VALUES (:address, :now, 1) ON CONFLICT (address) "
+            "DO UPDATE SET window_start = :now, count = 1",
+            {"address": address, "now": now},
+        )
+    else:
+        conn.execute(
+            "UPDATE mail_throttle SET count = count + 1 WHERE address = ?", (address,)
+        )
