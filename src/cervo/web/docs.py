@@ -157,9 +157,10 @@ def docs_page() -> HTMLResponse:
                 cls="steps",
             ),
             P(
-                "A code is good for ten minutes and five tries. If the page "
-                "tells you the sign-in is over, nothing is broken — go back "
-                "to Claude and click Connect again for a fresh code.",
+                "A sign-in attempt lasts ten minutes and allows five tries. "
+                "If the page tells you the sign-in is over, nothing is "
+                "broken — go back to Claude and click Connect again for a "
+                "fresh code.",
                 cls="note",
             ),
             P(

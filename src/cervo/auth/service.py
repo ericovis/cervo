@@ -58,7 +58,8 @@ page, it is at:
 
     {link}
 
-The code expires in {minutes} minutes. If this wasn't you, ignore this
+This code works until the sign-in attempt expires — within {minutes}
+minutes of when you started connecting. If this wasn't you, ignore this
 email — nothing has been created and nobody has access to your sites.
 """
 

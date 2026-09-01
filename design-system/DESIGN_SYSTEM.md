@@ -3,7 +3,7 @@
 Terminal-receipt aesthetic for all cervo-served pages (default index, future error pages, listings). Monospace throughout, one amber accent, warm-dark base with a paper-light variant. Zero external requests: system fonts only, styles inline in each page.
 
 ## Principles
-- Self-contained pages: copy the token block (`cervo-tokens.css`) into each template's `<style>`; no shared stylesheet to serve or cache-bust.
+- Self-contained pages: the token block lives in `src/cervo/templates/_tokens.css`; `web/layout.py` inlines it into every page's `<style>` (and `web.default_page` carries it into deployed sites), so there is no shared stylesheet to serve or cache-bust.
 - Dark is the base. Light comes from `@media (prefers-color-scheme: light)`; an explicit `[data-theme]` on `<html>` (set by the toggle, persisted in `localStorage["cervo-theme"]`) overrides both.
 - One accent. Amber marks status, links, section labels, and prompt carets — nothing else. No additional hues.
 - Voice: terse and lowercase for labels (`site`, `address`, `deployed`); uppercase letterspaced only for section headings; plain matter-of-fact sentences.
@@ -33,8 +33,8 @@ Stack: `ui-monospace, "SF Mono", Menlo, Consolas, monospace` — everything.
 - Content column: max-width 640px, centered, padding 44px 24px 56px
 - Hero: status 40px below header; h1 margins 10px / 14px
 - Sections: margin-top 42px, `1px solid --rule` top border, padding-top 24px, first paragraph +10px
-- Receipt block: margin-top 34px, max-width 480px, 10px row gap
-- Prose measure: 54–56ch
+- Receipt block: margin-top 24px, full content column, 10px row gap
+- One measure: prose, receipts, and figures all run the full 640px column
 
 ## Components
 - **Header** — flex, space-between: `cervo` wordmark (12px, 700, `--ink`) left; tagline (12px, `--muted`) + theme toggle right, 14px gap.

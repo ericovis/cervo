@@ -59,10 +59,22 @@ def privacy_page() -> HTMLResponse:
         layout.section(
             "WHAT IS NOT",
             P(
-                "No analytics, no tracking, no cookies. The only thing "
-                "kept in your browser is your theme preference, stored "
-                "locally and never sent anywhere. cervo emails you nothing "
-                "but sign-in codes, and your address is not shared."
+                "No analytics and no tracking on your sites, and no cookies: "
+                "the only thing kept in your browser is your theme "
+                "preference, stored locally and never sent anywhere. cervo "
+                "emails you nothing but sign-in codes."
+            ),
+        ),
+        layout.section(
+            "WHAT LEAVES, TO RUN THE SERVICE",
+            P(
+                "Two things go elsewhere, both to keep the service running. "
+                "In production your email is registered with the certificate "
+                "authority that issues your sites' HTTPS certificates, and "
+                "cervo's servers send operational telemetry — requests, "
+                "background jobs, and errors, which can include your email "
+                "and network address — to an error-monitoring service. "
+                "Nothing else is shared."
             ),
         ),
     )

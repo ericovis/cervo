@@ -1,6 +1,6 @@
   /* ── cervo design tokens: "deploy receipt" ─────────────────────────
      The single source for the theme variables, shared by every cervo page:
-     web/layout.py reads this file, and the MCP-app templates include it.
+     web/layout.py inlines this file into each page's <style>.
      Dark is the base; light overrides follow the visitor's OS setting, and
      [data-theme] (set by the toggle) beats both. */
   :root {
