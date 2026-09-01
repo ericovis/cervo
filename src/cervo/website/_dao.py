@@ -25,11 +25,10 @@ _CREATE_OWNER_INDEX = """
 CREATE INDEX IF NOT EXISTS website_user_id ON website (user_id)
 """
 
-_UPSERT = """
+_INSERT_IF_ABSENT = """
 INSERT INTO website (slug, user_id, created_at, updated_at)
 VALUES (:slug, :user_id, :now, :now)
-ON CONFLICT (slug) DO UPDATE
-SET user_id = excluded.user_id, updated_at = excluded.updated_at
+ON CONFLICT (slug) DO NOTHING
 RETURNING *
 """
 
@@ -60,12 +59,22 @@ def create_tables(conn: sqlite3.Connection) -> None:
     conn.execute(_CREATE_OWNER_INDEX)
 
 
-def upsert(conn: sqlite3.Connection, slug: str, user_id: int) -> Website:
-    """Insert the website, or hand it to a new owner if the slug is taken."""
+def insert_if_absent(
+    conn: sqlite3.Connection, slug: str, user_id: int
+) -> Website | None:
+    """Insert the website, or return None if the slug is already taken.
+
+    The insert is the atomic point that decides who owns a fresh slug: it
+    takes the write lock, so a second creator racing for the same new slug
+    conflicts here and gets None rather than the row — ownership is never
+    handed to a later creator. (A plain leading SELECT would not do: sqlite3
+    opens the write transaction only at the first write, so two creators
+    could both read "absent" before either wrote.)
+    """
     row = conn.execute(
-        _UPSERT, {"slug": slug, "user_id": user_id, "now": _now()}
+        _INSERT_IF_ABSENT, {"slug": slug, "user_id": user_id, "now": _now()}
     ).fetchone()
-    return Website(**row)
+    return Website(**row) if row else None
 
 
 def get(conn: sqlite3.Connection, slug: str) -> Website | None:

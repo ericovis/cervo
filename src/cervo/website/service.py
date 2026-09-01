@@ -91,12 +91,15 @@ def create(conn: sqlite3.Connection, slug: str, owner: User) -> Website:
     if slug in _RESERVED:
         raise WebsiteError(f"The slug {slug!r} is reserved.")
 
-    existing = _dao.get(conn, slug)
-    if existing is None:
-        site = _dao.upsert(conn, slug, owner.id)
+    # The insert is atomic and decides ownership: a second creator racing for
+    # the same fresh slug conflicts and gets None here, never the row.
+    created = _dao.insert_if_absent(conn, slug, owner.id)
+    if created is not None:
         job.enqueue(conn, DEPLOY_CHAIN[0], {"slug": slug})
-        return _with_deployment(conn, site)
-    if existing.user_id != owner.id:
+        return _with_deployment(conn, created)
+
+    existing = _dao.get(conn, slug)
+    if existing is None or existing.user_id != owner.id:
         raise WebsiteError(f"The slug {slug!r} is already taken.")
 
     deployment = job.latest_of(conn, DEPLOY_CHAIN, {"slug": slug})
