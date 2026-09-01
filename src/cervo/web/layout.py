@@ -18,6 +18,7 @@ from fasthtml.common import (
     Div,
     Dl,
     Dt,
+    Footer,
     Head,
     Header,
     Html,
@@ -46,18 +47,24 @@ _PAGE_CSS = """
     font-size: 13px; line-height: 1.65;
   }
   /* The one width in the design: prose, receipts, and figures all run
-     the full column, so nothing sits at a different measure. */
-  main { max-width: 640px; margin: 0 auto; padding: 44px 24px 56px; }
+     the full column, so nothing sits at a different measure. The three page
+     landmarks (banner / main / contentinfo) are body-level siblings sharing
+     it, so assistive tech can jump between them. */
+  header, main, footer {
+    max-width: 640px; margin-left: auto; margin-right: auto;
+    padding-left: 24px; padding-right: 24px;
+  }
+  main { padding-bottom: 56px; }
   a { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
   a:hover { color: var(--ink); }
   /* ── header ── */
-  header { display: flex; justify-content: space-between; align-items: center; }
+  header { display: flex; justify-content: space-between; align-items: center; padding-top: 44px; }
   .wordmark { color: var(--ink); font-weight: 700; font-size: 12px; text-decoration: none; }
   .header-right { display: flex; align-items: center; gap: 14px; }
   .tagline { color: var(--muted); font-size: 12px; }
   #theme-toggle {
     background: transparent; border: 1px solid var(--rule); border-radius: 4px;
-    padding: 3px 10px; font-family: inherit; font-size: 11px; color: var(--muted); cursor: pointer;
+    padding: 4px 10px; font-family: inherit; font-size: 11px; color: var(--muted); cursor: pointer;
   }
   #theme-toggle:hover { color: var(--accent); border-color: var(--accent); }
   /* ── hero ── */
@@ -73,7 +80,7 @@ _PAGE_CSS = """
   /* ── sections ── */
   section { margin-top: 42px; border-top: 1px solid var(--rule); padding-top: 24px; scroll-margin-top: 16px; }
   h2 { font-size: 11px; letter-spacing: 0.18em; color: var(--accent); font-weight: 400; margin: 0; }
-  section p { margin: 10px 0 0; }
+  section p, footer p { margin: 10px 0 0; }
   .endpoint { display: inline-block; margin: 14px 0 0; padding: 10px 16px; background: var(--code-bg); border: 1px solid var(--rule); border-radius: 6px; overflow-wrap: anywhere; }
   .endpoint a { text-decoration: none; }
   .steps { margin: 12px 0 0; padding-left: 22px; display: flex; flex-direction: column; gap: 8px; }
@@ -82,13 +89,18 @@ _PAGE_CSS = """
   .prompts .caret { color: var(--accent); }
   .prompts .prompt-text { color: var(--ink); }
   .command { margin: 10px 0 0; padding: 10px 14px; background: var(--code-bg); border: 1px solid var(--rule); border-radius: 6px; overflow-x: auto; font-size: 12px; color: var(--ink); }
+  /* Inline code in prose reads as a literal; the block .command above owns its own frame. */
+  p code, li code { background: var(--code-bg); border-radius: 4px; padding: 1px 5px; }
   /* ── figures ── */
-  figure { margin: 16px 0 0; }
-  figure svg { display: block; width: 100%; height: auto; font-family: inherit; }
+  /* Figures keep a legible minimum width and scroll on narrow screens rather
+     than shrinking their labels into illegibility. */
+  figure { margin: 16px 0 0; overflow-x: auto; }
+  figure svg { display: block; width: 100%; min-width: 560px; height: auto; font-family: inherit; }
   figcaption { margin-top: 8px; color: var(--muted); font-size: 12px; }
   .steps figure { margin: 14px 0 4px; }
   .note { color: var(--muted); }
   /* ── footer ── */
+  footer { margin-top: 42px; padding-top: 24px; padding-bottom: 56px; border-top: 1px solid var(--rule); }
   .fine p { font-size: 12px; color: var(--muted); }
   .footer-links { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 12px; font-size: 12px; }
   @media (max-width: 480px) { h1 { font-size: 22px; } }
@@ -112,8 +124,11 @@ _THEME_TOGGLE_JS = """
       return document.documentElement.dataset.theme || (mq.matches ? "light" : "dark");
     }
     function label() {
-      btn.textContent = effective() === "dark" ? "\\u2600 light" : "\\u263E dark";
+      var toLight = effective() === "dark";
+      btn.textContent = toLight ? "\\u2600 light" : "\\u263E dark";
+      btn.setAttribute("aria-label", toLight ? "Switch to light theme" : "Switch to dark theme");
     }
+    btn.hidden = false;  // reveal only now that the toggle is wired up
     btn.addEventListener("click", function () {
       var next = effective() === "dark" ? "light" : "dark";
       document.documentElement.dataset.theme = next;
@@ -143,12 +158,10 @@ def document(title: str, *content, base: str = "") -> str:
                 Script(_THEME_BOOT_JS),
             ),
             Body(
-                Main(
-                    _header_bar(base),
-                    *content,
-                    _footer(base),
-                    Script(_THEME_TOGGLE_JS),
-                )
+                _header_bar(base),
+                Main(*content),
+                _footer(base),
+                Script(_THEME_TOGGLE_JS),
             ),
             lang="en",
         )
@@ -207,14 +220,22 @@ def _header_bar(base: str):
         A("cervo", href=f"{base}/", cls="wordmark"),
         Span(
             Span("static hosting", cls="tagline"),
-            Button(id="theme-toggle", type="button", aria_label="Toggle color theme"),
+            # Hidden until the script proves it works, so no-JS visitors never
+            # meet a dead control; the script relabels it to the actual theme.
+            Button(
+                "☀ light",
+                id="theme-toggle",
+                type="button",
+                hidden=True,
+                aria_label="Switch to light theme",
+            ),
             cls="header-right",
         ),
     )
 
 
 def _footer(base: str):
-    return Section(
+    return Footer(
         H2("ABOUT CERVO"),
         P(
             A("cervo", href="https://github.com/ericovis/cervo"),

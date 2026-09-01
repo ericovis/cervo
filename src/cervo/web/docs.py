@@ -186,9 +186,9 @@ def docs_page() -> HTMLResponse:
                 "Create a website called my-cool-site",
             ),
             P(
-                f"Within seconds the site is live at "
-                f"{config.origin(f'my-cool-site.{config.DOMAIN}')}, serving a default "
-                "page until you publish your own."
+                "Within seconds the site is live at ",
+                Code(config.origin(f"my-cool-site.{config.DOMAIN}")),
+                ", serving a default page until you publish your own.",
             ),
             anchor="getting-started",
         ),

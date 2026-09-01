@@ -136,7 +136,7 @@ def _email_page(
         ),
         layout.section(
             "YOUR EMAIL",
-            *([P(error, cls="error")] if error else []),
+            *([P(error, cls="error", role="alert")] if error else []),
             Form(
                 Input(type="hidden", name="txn", value=txn_id),
                 Input(
@@ -146,6 +146,7 @@ def _email_page(
                     placeholder="you@example.com",
                     required=True,
                     autofocus=True,
+                    aria_label="Your email address",
                 ),
                 # Wrapping the input in its label needs no "for", and makes
                 # the whole sentence a click target.
@@ -186,7 +187,7 @@ def _code_page(txn_id: str, email: str, error: str | None = None) -> HTMLRespons
         ),
         layout.section(
             "THE CODE",
-            *([P(error, cls="error")] if error else []),
+            *([P(error, cls="error", role="alert")] if error else []),
             Form(
                 Input(type="hidden", name="txn", value=txn_id),
                 Input(
@@ -198,6 +199,8 @@ def _code_page(txn_id: str, email: str, error: str | None = None) -> HTMLRespons
                     required=True,
                     autofocus=True,
                     autocomplete="one-time-code",
+                    aria_label="The six-digit code from your email",
+                    title="the six digits from the email",
                 ),
                 Button("Sign in"),
                 action="/verify/code",
