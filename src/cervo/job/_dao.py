@@ -127,6 +127,13 @@ ORDER BY id DESC
 LIMIT 1
 """
 
+# Both the kind list and the payload-field conditions are filled per call. The
+# json path and value are bound, never interpolated, so callers cannot inject.
+_NEWEST_ID = """
+SELECT MAX(id) AS newest FROM job
+WHERE kind IN ({placeholders}){conditions}
+"""
+
 
 def _now() -> float:
     return datetime.now(UTC).timestamp()
@@ -227,3 +234,22 @@ def latest_of(
     query = _LATEST_OF.format(placeholders=",".join("?" * len(kinds)))
     row = conn.execute(query, (*kinds, _serialize(payload))).fetchone()
     return _from_row(row) if row else None
+
+
+def newest_id(
+    conn: sqlite3.Connection, kinds: Sequence[str], match: dict[str, Any]
+) -> int | None:
+    """The id of the newest job among ``kinds`` matching these payload fields.
+
+    ``match`` is a subset of payload keys to equal (e.g. slug and path),
+    compared through ``json_extract`` — so jobs whose payloads differ in other
+    fields (a file's content, say) still match. None if there is no such job.
+    """
+    placeholders = ",".join("?" * len(kinds))
+    conditions = " AND json_extract(payload, ?) = ?" * len(match)
+    query = _NEWEST_ID.format(placeholders=placeholders, conditions=conditions)
+    params: list[Any] = [*kinds]
+    for key, value in match.items():
+        params += [f"$.{key}", value]
+    row = conn.execute(query, params).fetchone()
+    return row["newest"] if row and row["newest"] is not None else None

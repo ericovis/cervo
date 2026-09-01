@@ -73,7 +73,7 @@ def run_once() -> bool:
         handler = _HANDLERS.get(claimed.kind)
         if handler is None:
             raise RuntimeError(f"no handler for job kind {claimed.kind!r}")
-        handler(claimed.payload)
+        handler(claimed)
     except job.PermanentError as error:
         _log.warning("job %d (%s) failed for good: %s", claimed.id, claimed.kind, error)
         with connect() as conn:
@@ -133,13 +133,13 @@ def _job_event(claimed: job.Job, outcome: str, started: float) -> None:
     )
 
 
-def _provision_website(payload: dict[str, Any]) -> None:
+def _provision_website(claimed: job.Job) -> None:
     """Create the site's directory and its default page.
 
     Idempotent, so a retried step is safe: the default page is written only
     if the owner has not replaced it with their own.
     """
-    slug = payload["slug"]
+    slug = claimed.payload["slug"]
     with connect() as conn:
         site = website.get(conn, slug)
     if site is None:
@@ -163,19 +163,19 @@ def _write_default_page(site: website.Website) -> None:
     )
 
 
-def _configure_website(payload: dict[str, Any]) -> None:
+def _configure_website(claimed: job.Job) -> None:
     """Render the Caddyfile from the database, covering every site."""
     with connect() as conn:
         sites = website.routes(conn)
     caddy.render(sites)
 
 
-def _activate_website(payload: dict[str, Any]) -> None:
+def _activate_website(claimed: job.Job) -> None:
     """Reload caddy, so it serves what the rendered Caddyfile says."""
     caddy.reload()
 
 
-def _validate_file(payload: dict[str, Any]) -> None:
+def _validate_file(claimed: job.Job) -> None:
     """Check a submitted file before anything touches the disk.
 
     Nothing in the payload is trusted, even though the server checked it
@@ -183,6 +183,7 @@ def _validate_file(payload: dict[str, Any]) -> None:
     process that will write. Every failure is a verdict, not an accident,
     so the job fails for good instead of retrying.
     """
+    payload = claimed.payload
     slug, path, content = payload["slug"], payload["path"], payload["content"]
     with connect() as conn:
         site = website.get(conn, slug)
@@ -197,19 +198,24 @@ def _validate_file(payload: dict[str, Any]) -> None:
         raise job.PermanentError(str(error)) from error
 
 
-def _write_file(payload: dict[str, Any]) -> None:
+def _write_file(claimed: job.Job) -> None:
     """Write a validated file into its site's directory.
 
     The site is checked again right before writing — and against the
     submitting owner's id, because a freed slug may already belong to
     someone else, into whose site a stale write must never land. (The
-    window between this check and the write is accepted.) Rewriting the
-    same content makes a retried step safe; caddy's file_server picks the
-    file up with no reload.
+    window between this check and the write is accepted.) A newer write or
+    deletion of the same file supersedes this one, so an older retry never
+    reverts it. Rewriting the same content makes a retried step safe;
+    caddy's file_server picks the file up with no reload.
     """
+    payload = claimed.payload
     slug, path, content = payload["slug"], payload["path"], payload["content"]
     with connect() as conn:
         site = website.get(conn, slug)
+        superseded = website.file_job_superseded(conn, claimed)
+    if superseded:
+        raise job.PermanentError("a newer write or deletion of this file supersedes it")
     if site is None or site.user_id != payload["user_id"]:
         raise job.PermanentError(f"the site {slug!r} was deleted")
     try:
@@ -220,20 +226,26 @@ def _write_file(payload: dict[str, Any]) -> None:
     target.write_text(content)
 
 
-def _delete_file(payload: dict[str, Any]) -> None:
+def _delete_file(claimed: job.Job) -> None:
     """Delete a file from its site's directory.
 
     The site is checked again right before deleting — and against the
     submitting owner's id, because a freed slug may already belong to
-    someone else, whose files must never be touched. A missing file makes
-    a retried step safe; empty folders the deletion leaves behind are
-    pruned, and a deleted index.html gets the default page back in its
-    place — a site never loses its landing page. Caddy's file_server
-    notices with no reload.
+    someone else, whose files must never be touched. A newer write or
+    deletion of the same file supersedes this one, so an older retry never
+    removes a file a later write just published. A missing file makes a
+    retried step safe; empty folders the deletion leaves behind are pruned,
+    and a deleted index.html gets the default page back in its place — a
+    site never loses its landing page. Caddy's file_server notices with no
+    reload.
     """
+    payload = claimed.payload
     slug, path = payload["slug"], payload["path"]
     with connect() as conn:
         site = website.get(conn, slug)
+        superseded = website.file_job_superseded(conn, claimed)
+    if superseded:
+        raise job.PermanentError("a newer write or deletion of this file supersedes it")
     if site is None or site.user_id != payload["user_id"]:
         raise job.PermanentError(f"the site {slug!r} was deleted")
     try:
@@ -250,7 +262,7 @@ def _delete_file(payload: dict[str, Any]) -> None:
         _write_default_page(site)
 
 
-def _delete_website(payload: dict[str, Any]) -> None:
+def _delete_website(claimed: job.Job) -> None:
     """Stop routing a deleted site and remove its files.
 
     The row is already gone, so rendering the Caddyfile from the database
@@ -260,7 +272,7 @@ def _delete_website(payload: dict[str, Any]) -> None:
     job runs (its cleanup delayed by a retry, say) keeps the new owner's
     files, the same guarantee delete_file makes.
     """
-    slug = payload["slug"]
+    slug = claimed.payload["slug"]
     with connect() as conn:
         sites = website.routes(conn)
         reclaimed = website.exists(conn, slug)
