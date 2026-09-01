@@ -345,7 +345,25 @@ async def test_a_followed_creation_reports_progress_and_returns_live():
 def test_the_homepage_is_served():
     page = _get(f"http://{DOMAIN}/")
     assert ">cervo</a>" in page  # the wordmark
+    assert 'href="/favicon.svg"' in page  # the brand's icons
+    assert f'content="http://{DOMAIN}/og-image-1200x630.png"' in page  # the card
     assert 'href="/docs"' in page  # setup lives in the docs, not here
+
+
+def test_the_brand_files_are_served():
+    # The icons and the preview card are the only real files cervo serves,
+    # and they come through caddy like every page does.
+    for path, media_type in (
+        ("/favicon.svg", "image/svg+xml"),
+        ("/favicon-16.png", "image/png"),
+        ("/favicon-32.png", "image/png"),
+        ("/apple-touch-icon-180.png", "image/png"),
+        ("/og-image-1200x630.png", "image/png"),
+    ):
+        response = urllib.request.urlopen(f"http://{DOMAIN}{path}", timeout=5)
+        assert response.status == 200, path
+        assert response.headers["content-type"] == media_type, path
+        assert len(response.read()) > 0, path
 
 
 def test_docs_terms_and_privacy_are_served():

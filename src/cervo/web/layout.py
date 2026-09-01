@@ -2,7 +2,9 @@
 
 The theme variables come from one file, ``templates/_tokens.css``; the
 rest of the CSS and the theme scripts are carried inline here, so every
-page is self-contained and makes zero external requests.
+page renders from its own bytes. The only things a page points out to are
+the brand's icons and preview card (``web/brand.py``), which browsers and
+scrapers fetch on their own terms rather than while rendering.
 """
 
 from importlib import resources
@@ -35,6 +37,8 @@ from fasthtml.common import (
 )
 from starlette.responses import HTMLResponse
 
+from cervo.web import brand
+
 # The theme variables live in one file so every page shares them; see
 # templates/_tokens.css.
 _TOKENS_CSS = resources.files("cervo").joinpath("templates", "_tokens.css").read_text()
@@ -59,7 +63,12 @@ _PAGE_CSS = """
   a:hover { color: var(--ink); }
   /* ── header ── */
   header { display: flex; justify-content: space-between; align-items: center; padding-top: 44px; }
-  .wordmark { color: var(--ink); font-weight: 700; font-size: 12px; text-decoration: none; }
+  /* The lockup: amber mark, cream wordmark — the same pairing as the
+     preview card and the icons. */
+  .wordmark { display: inline-flex; align-items: center; gap: 7px; color: var(--ink); font-weight: 700; font-size: 12px; text-decoration: none; }
+  .wordmark svg { width: 15px; height: 15px; color: var(--accent); }
+  .wordmark:hover { color: var(--ink); }
+  .wordmark:hover svg { color: var(--ink); }
   .header-right { display: flex; align-items: center; gap: 14px; }
   .tagline { color: var(--muted); font-size: 12px; }
   #theme-toggle {
@@ -141,12 +150,16 @@ _THEME_TOGGLE_JS = """
 """
 
 
-def document(title: str, *content, base: str = "") -> str:
+def document(
+    title: str, *content, base: str = "", description: str = brand.DESCRIPTION
+) -> str:
     """A whole page: chrome around ``content``, rendered to HTML.
 
     ``base`` prefixes every link into cervo itself — empty on cervo's own
     pages, the apex origin (``http://{DOMAIN}``) on pages served from a
     site's subdomain, where a relative link would stay on the site.
+    ``description`` is what search results and the link preview say about
+    this page; the brand's own sentence when a page has nothing better.
     """
     return to_xml(
         Html(
@@ -154,6 +167,7 @@ def document(title: str, *content, base: str = "") -> str:
                 Meta(charset="utf-8"),
                 Meta(name="viewport", content="width=device-width, initial-scale=1"),
                 Title(title),
+                *brand.head_tags(title, description, base),
                 Style(_TOKENS_CSS + _PAGE_CSS),
                 Script(_THEME_BOOT_JS),
             ),
@@ -168,9 +182,16 @@ def document(title: str, *content, base: str = "") -> str:
     )
 
 
-def page(title: str, *content, status: int = 200) -> HTMLResponse:
+def page(
+    title: str,
+    *content,
+    status: int = 200,
+    description: str = brand.DESCRIPTION,
+) -> HTMLResponse:
     """A whole page as a response, for the website's routes."""
-    return HTMLResponse(document(title, *content), status_code=status)
+    return HTMLResponse(
+        document(title, *content, description=description), status_code=status
+    )
 
 
 def hero(status_line: str, heading: str, intro: str):
@@ -217,7 +238,8 @@ def prompts(*texts: str):
 
 def _header_bar(base: str):
     return Header(
-        A("cervo", href=f"{base}/", cls="wordmark"),
+        # The mark is decorative here: the wordmark beside it says the name.
+        A(brand.mark(), "cervo", href=f"{base}/", cls="wordmark"),
         Span(
             Span("static hosting", cls="tagline"),
             # Hidden until the script proves it works, so no-JS visitors never
