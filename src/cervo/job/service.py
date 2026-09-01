@@ -82,6 +82,15 @@ def reap(conn: sqlite3.Connection) -> int:
     return _dao.reap(conn, _MAX_ATTEMPTS, _RETRY_DELAY)
 
 
+def prune(conn: sqlite3.Connection, kinds: Sequence[str], older_than: float) -> int:
+    """Delete terminal jobs of ``kinds`` past a retention horizon.
+
+    For kinds whose payload is bulky (a file write carries its content): once
+    done or failed for good and old enough, the row is only dead weight.
+    """
+    return _dao.prune(conn, kinds, older_than)
+
+
 def latest_of(
     conn: sqlite3.Connection, kinds: Sequence[str], payload: dict[str, Any]
 ) -> Job | None:

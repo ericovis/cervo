@@ -21,6 +21,8 @@ from cervo.db import connect
 from cervo.schema import create_tables
 
 _POLL_INTERVAL = 2  # seconds
+_PRUNE_INTERVAL = 3600  # seconds between sweeps of old file jobs
+_JOB_RETENTION = 86400  # keep a terminal file job at least a day before pruning
 
 _log = logging.getLogger(__name__)
 
@@ -41,6 +43,7 @@ def main() -> None:
     monitoring.setup()  # once for the process; a no-op outside production
     create_tables()
     _heal()  # once, before any thread polls — never concurrently
+    _prune_old_jobs()  # clear any backlog left by a previous run
     threading.current_thread().name = "worker-1"
     for n in range(config.WORKER_CONCURRENCY - 1):
         threading.Thread(
@@ -55,12 +58,16 @@ def run_forever() -> None:
     Daemon threads plus reaper-based recovery are the whole shutdown story
     (see the module docstring), so there is deliberately no graceful-stop hook.
     """
+    last_prune = monotonic()
     while True:
         sleep(_POLL_INTERVAL)
         with connect() as conn:
             reaped = job.reap(conn)
         if reaped:
             _log.warning("reclaimed %d timed-out job(s)", reaped)
+        if monotonic() - last_prune >= _PRUNE_INTERVAL:
+            _prune_old_jobs()
+            last_prune = monotonic()
         while run_once():
             pass
 
@@ -322,6 +329,21 @@ _NEXT = {
     **dict(zip(website.FILE_CHAIN, website.FILE_CHAIN[1:], strict=False)),
     **dict(zip(website.DELETE_FILE_CHAIN, website.DELETE_FILE_CHAIN[1:], strict=False)),
 }
+
+
+def _prune_old_jobs() -> None:
+    """Drop terminal file jobs old enough that their payloads are dead weight.
+
+    Only the file-write chain, whose payload carries the file's content; the
+    deploy chain's rows are tiny and carry a site's status, so they stay.
+    """
+    try:
+        with connect() as conn:
+            removed = job.prune(conn, website.FILE_CHAIN, _JOB_RETENTION)
+        if removed:
+            _log.info("pruned %d old file job(s)", removed)
+    except Exception as error:  # noqa: BLE001 — housekeeping must not kill the loop
+        _log.warning("could not prune old jobs: %s", error)
 
 
 def _heal() -> None:

@@ -121,6 +121,15 @@ SET attempts = attempts + 1,
 WHERE status = 'running' AND times_out_at <= :now
 """
 
+# Drop terminal jobs of the given kinds past a retention horizon, so their
+# payloads (a file write carries up to a megabyte) do not pile up forever.
+_PRUNE = """
+DELETE FROM job
+WHERE kind IN ({placeholders})
+  AND status IN ('done', 'failed')
+  AND created_at < ?
+"""
+
 # The IN () placeholders are filled per call — the number of kinds varies.
 _LATEST_OF = """
 SELECT * FROM job
@@ -239,6 +248,12 @@ def reap(conn: sqlite3.Connection, max_attempts: int, retry_delay: int) -> int:
         _REAP,
         {"max_attempts": max_attempts, "retry_delay": retry_delay, "now": _now()},
     ).rowcount
+
+
+def prune(conn: sqlite3.Connection, kinds: Sequence[str], older_than: float) -> int:
+    """Delete terminal jobs of ``kinds`` older than ``older_than`` seconds."""
+    query = _PRUNE.format(placeholders=",".join("?" * len(kinds)))
+    return conn.execute(query, (*kinds, _now() - older_than)).rowcount
 
 
 def latest_of(
