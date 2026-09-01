@@ -90,7 +90,9 @@ def run_once() -> bool:
         with connect() as conn:
             outcome = job.fail_permanently(conn, claimed, str(error))
         if outcome is None:
-            _log.warning("job %d (%s) lease lost; not recorded", claimed.id, claimed.kind)
+            _log.warning(
+                "job %d (%s) lease lost; not recorded", claimed.id, claimed.kind
+            )
         else:
             monitoring.report(error, permanent=True, **_job_context(claimed))
             _job_event(claimed, "failed", started)
@@ -99,7 +101,9 @@ def run_once() -> bool:
         with connect() as conn:
             failed = job.fail(conn, claimed, str(error))
         if failed is None:
-            _log.warning("job %d (%s) lease lost; not recorded", claimed.id, claimed.kind)
+            _log.warning(
+                "job %d (%s) lease lost; not recorded", claimed.id, claimed.kind
+            )
         else:
             spent = failed.status == "failed"  # attempts exhausted, no retry
             monitoring.report(error, permanent=spent, **_job_context(claimed))
