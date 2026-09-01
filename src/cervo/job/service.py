@@ -73,11 +73,6 @@ def reap(conn: sqlite3.Connection) -> int:
     return _dao.reap(conn, _MAX_ATTEMPTS, _RETRY_DELAY)
 
 
-def latest(conn: sqlite3.Connection, kind: str, payload: dict[str, Any]) -> Job | None:
-    """The current state of this piece of work, if it was ever queued."""
-    return _dao.latest(conn, kind, payload)
-
-
 def latest_of(
     conn: sqlite3.Connection, kinds: Sequence[str], payload: dict[str, Any]
 ) -> Job | None:

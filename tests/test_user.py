@@ -7,10 +7,10 @@ from tests.conftest import OWNER, chat
 
 def test_a_user_is_created_on_first_sight():
     with connect() as conn:
-        assert user.by_email(conn, OWNER) is None
+        assert conn.execute("SELECT count(*) AS c FROM user").fetchone()["c"] == 0
         created = user.ensure(conn, OWNER)
         assert created.email == OWNER
-        assert user.by_email(conn, OWNER) == created
+        assert user.by_id(conn, created.id) == created
 
 
 def test_the_same_address_is_always_the_same_user():

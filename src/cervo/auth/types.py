@@ -8,8 +8,6 @@ every MCP request afterwards carries a Bearer token minted here. A
 redirect need, plus the state of the email challenge.
 """
 
-import time
-
 from pydantic import BaseModel, EmailStr
 
 
@@ -28,6 +26,3 @@ class Transaction(BaseModel):
     code_hash: str | None = None
     attempts: int = 0
     expires_at: float
-
-    def is_expired(self) -> bool:
-        return time.time() >= self.expires_at

@@ -137,8 +137,8 @@ def test_latest_matches_the_exact_kind_and_payload():
     new = enqueued(slug="a")
 
     with connect() as conn:
-        found = job.latest(conn, "probe", {"slug": "a"})
-        missing = job.latest(conn, "probe", {"slug": "c"})
+        found = job.latest_of(conn, ("probe",), {"slug": "a"})
+        missing = job.latest_of(conn, ("probe",), {"slug": "c"})
 
     assert found.id == new.id > old.id
     assert missing is None

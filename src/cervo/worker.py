@@ -13,7 +13,7 @@ behavior deterministically.
 import logging
 import shutil
 import threading
-from time import monotonic
+from time import monotonic, sleep
 from typing import Any
 
 from cervo import caddy, config, job, monitoring, web, website
@@ -49,10 +49,14 @@ def main() -> None:
     run_forever()
 
 
-def run_forever(stop: threading.Event | None = None) -> None:
-    """Poll for due jobs until told to stop (in practice: until killed)."""
-    stop = stop or threading.Event()
-    while not stop.wait(_POLL_INTERVAL):
+def run_forever() -> None:
+    """Poll for due jobs until the process is killed.
+
+    Daemon threads plus reaper-based recovery are the whole shutdown story
+    (see the module docstring), so there is deliberately no graceful-stop hook.
+    """
+    while True:
+        sleep(_POLL_INTERVAL)
         with connect() as conn:
             reaped = job.reap(conn)
         if reaped:

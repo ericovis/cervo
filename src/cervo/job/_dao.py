@@ -11,8 +11,8 @@ yet?", "timed out?" — stays in SQL. The payload is stored as canonical JSON
 
 import json
 import sqlite3
+import time
 from collections.abc import Collection, Sequence
-from datetime import UTC, datetime
 from typing import Any
 
 from cervo.job.types import Job
@@ -112,13 +112,6 @@ SET attempts = attempts + 1,
 WHERE status = 'running' AND times_out_at <= :now
 """
 
-_LATEST = """
-SELECT * FROM job
-WHERE kind = ? AND payload = ?
-ORDER BY id DESC
-LIMIT 1
-"""
-
 # The IN () placeholders are filled per call — the number of kinds varies.
 _LATEST_OF = """
 SELECT * FROM job
@@ -136,7 +129,7 @@ WHERE kind IN ({placeholders}){conditions}
 
 
 def _now() -> float:
-    return datetime.now(UTC).timestamp()
+    return time.time()
 
 
 def _serialize(payload: dict[str, Any]) -> str:
@@ -219,12 +212,6 @@ def reap(conn: sqlite3.Connection, max_attempts: int, retry_delay: int) -> int:
         _REAP,
         {"max_attempts": max_attempts, "retry_delay": retry_delay, "now": _now()},
     ).rowcount
-
-
-def latest(conn: sqlite3.Connection, kind: str, payload: dict[str, Any]) -> Job | None:
-    """The newest job for exactly this kind and payload, if any."""
-    row = conn.execute(_LATEST, (kind, _serialize(payload))).fetchone()
-    return _from_row(row) if row else None
 
 
 def latest_of(

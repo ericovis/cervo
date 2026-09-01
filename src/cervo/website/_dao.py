@@ -8,7 +8,7 @@ only here; they leave as the model's datetimes.
 """
 
 import sqlite3
-from datetime import UTC, datetime
+import time
 
 from cervo.website.types import Route, Website
 
@@ -50,7 +50,7 @@ _DELETE = "DELETE FROM website WHERE slug = ?"
 
 
 def _now() -> float:
-    return datetime.now(UTC).timestamp()
+    return time.time()
 
 
 def create_tables(conn: sqlite3.Connection) -> None:

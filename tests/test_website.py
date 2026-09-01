@@ -17,7 +17,7 @@ async def test_the_owner_comes_from_the_session():
         result = await c.call_tool("create_website", {"slug": "alices-site"})
 
     with connect() as conn:
-        alice = user.by_email(conn, "alice@example.com")
+        alice = user.ensure(conn, "alice@example.com")
 
     content = dict(result.structured_content)
     assert content.pop("created_at") == content.pop("updated_at")
@@ -49,7 +49,7 @@ async def test_someone_else_cannot_take_a_slug_that_exists():
             await call(bob, "create_website", slug="contested")
 
     with connect() as conn:
-        alice = user.by_email(conn, "alice@example.com")
+        alice = user.ensure(conn, "alice@example.com")
         row = conn.execute(
             "SELECT * FROM website WHERE slug = ?", ("contested",)
         ).fetchone()
@@ -187,7 +187,7 @@ def test_creating_a_site_queues_the_first_step_of_the_chain():
     with connect() as conn:
         owner = user.ensure(conn, OWNER)
         site = website.create(conn, "queued", owner)
-        deployment = job.latest(conn, website.PROVISION_KIND, {"slug": "queued"})
+        deployment = job.latest_of(conn, (website.PROVISION_KIND,), {"slug": "queued"})
         queued = conn.execute("SELECT count(*) c FROM job").fetchone()["c"]
 
     assert site.status == "pending"
@@ -296,7 +296,7 @@ def test_the_service_deletes_the_row_and_queues_the_cleanup():
         owner = user.ensure(conn, OWNER)
         website.create(conn, "cleaned", owner)
         website.delete(conn, "cleaned", owner)
-        cleanup = job.latest(conn, website.DELETE_KIND, {"slug": "cleaned"})
+        cleanup = job.latest_of(conn, (website.DELETE_KIND,), {"slug": "cleaned"})
         assert not website.exists(conn, "cleaned")
 
     assert cleanup is not None

@@ -20,11 +20,6 @@ def ensure(conn: sqlite3.Connection, email: str) -> User:
     return _dao.upsert(conn, email)
 
 
-def by_email(conn: sqlite3.Connection, email: str) -> User | None:
-    """The user with this address, or None if they have never signed in."""
-    return _dao.get_by_email(conn, email)
-
-
 def by_id(conn: sqlite3.Connection, user_id: int) -> User | None:
     """The user with this id — how a token's subject becomes a person."""
     return _dao.get_by_id(conn, user_id)

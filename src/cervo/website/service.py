@@ -112,6 +112,16 @@ def create(conn: sqlite3.Connection, slug: str, owner: User) -> Website:
     raise WebsiteError(f"You already own {slug!r}; its deployment is in progress.")
 
 
+def _owned(conn: sqlite3.Connection, slug: str, owner: User) -> Website:
+    """The owner's site with this slug; raises if absent or someone else's."""
+    site = _dao.get(conn, slug)
+    if site is None:
+        raise WebsiteError(f"There is no site with the slug {slug!r}.")
+    if site.user_id != owner.id:
+        raise WebsiteError(f"The site {slug!r} belongs to someone else.")
+    return site
+
+
 def delete(conn: sqlite3.Connection, slug: str, owner: User) -> None:
     """Delete ``owner``'s site and queue the removal of its traces.
 
@@ -120,11 +130,7 @@ def delete(conn: sqlite3.Connection, slug: str, owner: User) -> None:
     Caddyfile and deletes the site's directory. Raises if there is no such
     site or it belongs to someone else.
     """
-    site = _dao.get(conn, slug)
-    if site is None:
-        raise WebsiteError(f"There is no site with the slug {slug!r}.")
-    if site.user_id != owner.id:
-        raise WebsiteError(f"The site {slug!r} belongs to someone else.")
+    _owned(conn, slug, owner)
     _dao.delete(conn, slug)
     job.enqueue(conn, DELETE_KIND, {"slug": slug})
 
@@ -165,11 +171,7 @@ def submit_file(
     site; an identical submission already in flight is returned instead of
     being queued twice.
     """
-    site = _dao.get(conn, slug)
-    if site is None:
-        raise WebsiteError(f"There is no site with the slug {slug!r}.")
-    if site.user_id != owner.id:
-        raise WebsiteError(f"The site {slug!r} belongs to someone else.")
+    _owned(conn, slug, owner)
     file_target(slug, path)
     try:
         size = len(content.encode("utf-8"))
@@ -212,11 +214,7 @@ def submit_file_deletion(
     someone else a file — and an identical deletion already in flight is
     returned instead of being queued twice.
     """
-    site = _dao.get(conn, slug)
-    if site is None:
-        raise WebsiteError(f"There is no site with the slug {slug!r}.")
-    if site.user_id != owner.id:
-        raise WebsiteError(f"The site {slug!r} belongs to someone else.")
+    _owned(conn, slug, owner)
     if not file_target(slug, path).is_file():
         raise WebsiteError(f"There is no file at {path!r} in {slug!r}.")
 
