@@ -33,6 +33,9 @@ def docs_page() -> HTMLResponse:
                 "your files", A("Updating your site", href="#updating-your-site")
             ),
             layout.receipt_row(
+                "the rules", A("What cervo accepts", href="#limitations")
+            ),
+            layout.receipt_row(
                 "behind it", A("How deployments work", href="#how-deployments-work")
             ),
         ),
@@ -43,16 +46,23 @@ def docs_page() -> HTMLResponse:
                 Strong("connector"),
                 ": a tool you hand to Claude once, so that Claude can host "
                 "websites on your behalf. Adding it takes about a minute, "
-                "and you never have to do it again.",
+                "and you never have to do it again — once it is connected, "
+                "cervo is there in every Claude conversation you start, on "
+                "every device you use Claude on.",
             ),
-            P("You will need this address — it is cervo's front door:"),
+            P(
+                "Do it whichever way you already use Claude: through the ",
+                A("claude.ai", href="https://claude.ai"),
+                " website, or with the Claude Code command line tool. Either "
+                "way you will need this address — it is cervo's front door:",
+            ),
             layout.endpoint_chip(mcp_url),
+            P(Strong("On the claude.ai website"), " — or the desktop app:"),
             Ol(
                 Li(
                     "Open ",
                     A("claude.ai", href="https://claude.ai"),
-                    " in your browser and sign in. (The Claude desktop and "
-                    "mobile apps work the same way.)",
+                    " in your browser and sign in as usual.",
                 ),
                 Li(
                     "Click your name in the bottom-left corner, choose ",
@@ -89,6 +99,30 @@ def docs_page() -> HTMLResponse:
                     ". A cervo page opens in your browser — that is step two.",
                 ),
                 cls="steps",
+            ),
+            P(Strong("In Claude Code"), " — the command line tool:"),
+            Ol(
+                Li(
+                    "Add cervo once, for every project you work in:",
+                    layout.command(
+                        f"claude mcp add --scope user --transport http cervo {mcp_url}"
+                    ),
+                ),
+                Li(
+                    "Start Claude Code and run ",
+                    Code("/mcp"),
+                    ", then choose cervo and authenticate. The same cervo "
+                    "page opens in your browser — that is step two.",
+                ),
+                cls="steps",
+            ),
+            P(
+                "The ",
+                Code("--scope user"),
+                " part is what makes it once and for all: cervo is then "
+                "available in every Claude Code session, in any folder, "
+                "rather than only the project you happened to be in.",
+                cls="note",
             ),
             anchor="connecting-from-claude",
         ),
@@ -169,7 +203,46 @@ def docs_page() -> HTMLResponse:
                 f"Upload my files to my-cool-site.{config.DOMAIN}",
                 f"Design my my-cool-site.{config.DOMAIN} website",
             ),
+            P(
+                "You do not need files of your own to start. Have Claude "
+                "design the page — in Claude Design, or just by describing "
+                "what you want in the chat — and then ask for it to be "
+                "published. The finished HTML and CSS go straight onto your "
+                "site: nothing to download, nothing to upload by hand."
+            ),
             anchor="updating-your-site",
+        ),
+        layout.section(
+            "WHAT CERVO ACCEPTS",
+            P(
+                "Cervo hosts plain static pages, and it is strict about "
+                "what goes on them: ",
+                Strong("only .html and .css files can be published"),
+                ". A file with any other extension is refused before it is "
+                "ever written, and so is anything that does not actually "
+                "read as HTML or CSS — the content is checked first.",
+            ),
+            layout.receipt(
+                layout.receipt_row("file types", ".html and .css, nothing else"),
+                layout.receipt_row("file size", "up to 1 MiB each"),
+                layout.receipt_row("paths", "lowercase, relative, subfolders fine"),
+                layout.receipt_row("site names", "lowercase letters, digits, hyphens"),
+            ),
+            P(
+                "So there is no uploading images, fonts, videos, PDFs, or "
+                "JavaScript files — and nothing runs on the server: no "
+                "forms that submit back to cervo, no database, no logins. "
+                "If you need a picture on a page, link to one hosted "
+                "elsewhere, or embed it in the page itself as a data URI, "
+                "within that 1 MiB."
+            ),
+            P(
+                "Your site always has a home page: deleting ",
+                Code("index.html"),
+                " puts cervo's default page back rather than leaving the site empty.",
+                cls="note",
+            ),
+            anchor="limitations",
         ),
         layout.section(
             "HOW DEPLOYMENTS WORK",
@@ -187,15 +260,6 @@ def docs_page() -> HTMLResponse:
                 "create your own failed site again queues a fresh "
                 "deployment. Every step is idempotent, so retrying is "
                 "always safe."
-            ),
-            P(
-                Strong("Using a developer tool instead?"),
-                " Cervo speaks plain MCP over HTTP. In Claude Code, ",
-                Code(f"claude mcp add --transport http cervo {mcp_url}"),
-                " then ",
-                Code("/mcp"),
-                " opens the very same sign-in.",
-                cls="note",
             ),
             anchor="how-deployments-work",
         ),

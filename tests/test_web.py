@@ -57,9 +57,24 @@ def test_the_docs_have_their_anchors(client):
         "signing-in",
         "getting-started",
         "updating-your-site",
+        "limitations",
         "how-deployments-work",
     ):
         assert f'id="{anchor}"' in page
+
+
+def test_the_docs_cover_both_ways_in(client):
+    page = client.get("/docs").text
+
+    assert "Add custom connector" in page  # the claude.ai route
+    # The CLI route, at user scope: cervo in every session, not one project.
+    assert "claude mcp add --scope user --transport http cervo" in page
+
+
+def test_the_docs_state_what_can_be_published(client):
+    page = client.get("/docs").text
+    assert "only .html and .css files can be published" in page
+    assert "1 MiB" in page
 
 
 def test_the_docs_illustrate_the_setup(client):

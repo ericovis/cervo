@@ -13,6 +13,7 @@ from fasthtml.common import (
     A,
     Body,
     Button,
+    Code,
     Dd,
     Div,
     Dl,
@@ -23,6 +24,7 @@ from fasthtml.common import (
     Main,
     Meta,
     P,
+    Pre,
     Script,
     Section,
     Span,
@@ -79,6 +81,7 @@ _PAGE_CSS = """
   .prompts > div { display: flex; gap: 10px; }
   .prompts .caret { color: var(--accent); }
   .prompts .prompt-text { color: var(--ink); }
+  .command { margin: 10px 0 0; padding: 10px 14px; background: var(--code-bg); border: 1px solid var(--rule); border-radius: 6px; overflow-x: auto; font-size: 12px; color: var(--ink); }
   /* ── figures ── */
   figure { margin: 16px 0 0; }
   figure svg { display: block; width: 100%; height: auto; font-family: inherit; }
@@ -184,6 +187,11 @@ def receipt_row(key: str, value):
 def endpoint_chip(url: str):
     """The MCP endpoint, framed like a snippet to copy."""
     return Div(A(url, href=url), cls="endpoint")
+
+
+def command(text: str):
+    """A shell command, framed to be copied — it scrolls rather than wraps."""
+    return Pre(Code(text), cls="command")
 
 
 def prompts(*texts: str):
