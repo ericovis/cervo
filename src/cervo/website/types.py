@@ -71,12 +71,12 @@ class Website(BaseModel):
         return config.origin(f"{self.slug}.{config.DOMAIN}")
 
 
-class FileWrite(BaseModel):
-    """A file submitted for writing into a site, and how that work stands.
+class _FileOperation(BaseModel):
+    """A file operation on a site, and how its chain of jobs stands.
 
-    Like a deployment, the write runs as a chain of jobs; ``status``,
-    ``error``, and the step fields describe the latest job of that chain,
-    filled in by the service whenever the state is read.
+    The operation runs as a chain of jobs; ``status``, ``error``, and the
+    step fields describe the latest job of that chain, filled in by the
+    service whenever the state is read.
     """
 
     slug: Slug
@@ -86,6 +86,10 @@ class FileWrite(BaseModel):
     step: str | None = None
     steps_done: int = 0
     steps_total: int = 0
+
+
+class FileWrite(_FileOperation):
+    """A file submitted for writing into a site, and how that work stands."""
 
     @computed_field
     @property
@@ -95,19 +99,8 @@ class FileWrite(BaseModel):
         return f"{site}/{self.path}"
 
 
-class FileDeletion(BaseModel):
+class FileDeletion(_FileOperation):
     """A file submitted for deletion from a site, and how that work stands.
 
-    Like a write, the deletion runs as a chain of jobs; ``status``,
-    ``error``, and the step fields describe the latest job of that chain,
-    filled in by the service whenever the state is read. There is no url:
-    nothing is served afterwards.
+    There is no url: nothing is served afterwards.
     """
-
-    slug: Slug
-    path: FilePath
-    status: FileStatus = "pending"
-    error: str | None = None
-    step: str | None = None
-    steps_done: int = 0
-    steps_total: int = 0

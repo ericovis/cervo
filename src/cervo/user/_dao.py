@@ -23,8 +23,6 @@ ON CONFLICT (email) DO UPDATE SET email = excluded.email
 RETURNING id, email
 """
 
-_GET_BY_EMAIL = "SELECT * FROM user WHERE email = ?"
-
 _GET_BY_ID = "SELECT * FROM user WHERE id = ?"
 
 
@@ -37,12 +35,6 @@ def upsert(conn: sqlite3.Connection, email: str) -> User:
     """Return the user for this address, creating them if they are new."""
     row = conn.execute(_UPSERT, {"email": email}).fetchone()
     return User(**row)
-
-
-def get_by_email(conn: sqlite3.Connection, email: str) -> User | None:
-    """Return the user with this address, if they exist."""
-    row = conn.execute(_GET_BY_EMAIL, (email,)).fetchone()
-    return User(**row) if row else None
 
 
 def get_by_id(conn: sqlite3.Connection, user_id: int) -> User | None:
