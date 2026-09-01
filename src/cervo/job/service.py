@@ -87,3 +87,14 @@ def latest_of(
     chain has come.
     """
     return _dao.latest_of(conn, kinds, payload)
+
+
+def newest_id(
+    conn: sqlite3.Connection, kinds: Sequence[str], match: dict[str, Any]
+) -> int | None:
+    """The id of the newest job among ``kinds`` matching these payload fields.
+
+    For deciding whether a claimed job has been superseded: a later
+    submission for the same target has a higher id.
+    """
+    return _dao.newest_id(conn, kinds, match)

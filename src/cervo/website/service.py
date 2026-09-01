@@ -242,6 +242,24 @@ def file_deletion_state(
     return _file_deletion(slug, path, link) if link else None
 
 
+def file_job_superseded(conn: sqlite3.Connection, claimed: job.Job) -> bool:
+    """Whether a newer write/delete job for the same file exists.
+
+    A file's writes and deletions all target one slug+path, so an older job
+    whose retry runs after a newer submission would revert it — or resurrect
+    a file a later deletion removed. The worker skips a write/delete job when
+    any FILE_CHAIN or DELETE_FILE_CHAIN job with a higher id (a later
+    submission) exists for the same slug+path.
+    """
+    payload = claimed.payload
+    newest = job.newest_id(
+        conn,
+        (*FILE_CHAIN, *DELETE_FILE_CHAIN),
+        {"slug": payload["slug"], "path": payload["path"]},
+    )
+    return newest is not None and newest > claimed.id
+
+
 def file_target(slug: str, path: str) -> Path:
     """The absolute location ``path`` names inside the site's directory.
 

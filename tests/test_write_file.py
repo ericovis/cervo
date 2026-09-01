@@ -7,6 +7,7 @@ no retries.
 """
 
 import asyncio
+import time
 
 import pytest
 from fastmcp.exceptions import ToolError
@@ -157,6 +158,51 @@ async def test_the_chain_advances_one_step_at_a_time():
         "writing the file",
         1,
     )
+
+
+async def test_a_stale_write_retry_does_not_revert_a_newer_write(data_dir):
+    """An older write whose retry runs after a newer write must not win.
+
+    Models the retry-delay reordering that bites even a single worker: a
+    first write is held back mid-chain (as a failed attempt would be), a
+    newer write of the same file completes, and then the older write comes
+    due — it must be superseded, not overwrite the newer content.
+    """
+    old, new = "<p>old</p>", "<p>new</p>"
+    created("mysite")
+    deploy()
+
+    with connect() as conn:
+        owner = user.ensure(conn, OWNER)
+        website.submit_file(conn, "mysite", "page.html", old, owner)
+    assert worker.run_once()  # validate the old write, queuing its write step
+
+    # Hold the old write back the way a 30s retry delay would.
+    with connect() as conn:
+        conn.execute(
+            "UPDATE job SET next_attempt_at = ? WHERE kind = ?",
+            (time.time() + 3600, website.WRITE_FILE_KIND),
+        )
+
+    # A newer write of the same file lands and completes.
+    with connect() as conn:
+        owner = user.ensure(conn, OWNER)
+        website.submit_file(conn, "mysite", "page.html", new, owner)
+    deploy()
+    assert (data_dir / "mysite" / "page.html").read_text() == new
+
+    # The old write now comes due; it is superseded, not applied.
+    with connect() as conn:
+        conn.execute(
+            "UPDATE job SET next_attempt_at = NULL "
+            "WHERE kind = ? AND status = 'pending'",
+            (website.WRITE_FILE_KIND,),
+        )
+    deploy()
+    assert (data_dir / "mysite" / "page.html").read_text() == new  # not reverted
+    stale = state_of("mysite", "page.html", old)
+    assert stale.status == "failed"
+    assert "supersede" in stale.error
 
 
 async def test_the_owner_can_replace_the_default_page(data_dir):
