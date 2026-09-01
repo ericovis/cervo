@@ -93,3 +93,14 @@ def newest_id(
     submission for the same target has a higher id.
     """
     return _dao.newest_id(conn, kinds, match)
+
+
+def latest_of_grouped(
+    conn: sqlite3.Connection, kinds: Sequence[str], field: str, values: Sequence[str]
+) -> dict[str, Job]:
+    """The newest job among ``kinds`` for each ``field`` value, in one query.
+
+    For attaching chain state to a whole list at once (every site's latest
+    deployment) without an N+1.
+    """
+    return _dao.latest_of_grouped(conn, kinds, field, values)

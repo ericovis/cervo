@@ -59,6 +59,11 @@ _DELETE_FILE_STEP_LABELS = {DELETE_FILE_KIND: "deleting the file"}
 MAX_FILE_BYTES = 1024 * 1024
 _ALLOWED_SUFFIXES = frozenset({".html", ".css"})
 
+# Per-owner and per-site limits, so one tester cannot exhaust the shared VPS.
+# Generous enough that ordinary use never meets them.
+_MAX_SITES_PER_USER = 25
+_MAX_FILES_PER_SITE = 100
+
 # DATA_DIR/caddyfile would collide with the rendered DATA_DIR/Caddyfile on a
 # case-insensitive filesystem (macOS development).
 _RESERVED = frozenset({"caddyfile"})
@@ -95,6 +100,15 @@ def create(conn: sqlite3.Connection, slug: str, owner: User) -> Website:
     # the same fresh slug conflicts and gets None here, never the row.
     created = _dao.insert_if_absent(conn, slug, owner.id)
     if created is not None:
+        # The quota applies to new sites only: re-deploying one you already own
+        # falls to the branch below. Count includes the row just inserted, so
+        # roll it back and refuse if it put the owner over the limit.
+        if _dao.count_for_user(conn, owner.id) > _MAX_SITES_PER_USER:
+            _dao.delete(conn, slug)
+            raise WebsiteError(
+                f"You can host at most {_MAX_SITES_PER_USER} sites. "
+                "Delete one before creating another."
+            )
         job.enqueue(conn, DEPLOY_CHAIN[0], {"slug": slug})
         return _with_deployment(conn, created)
 
@@ -143,7 +157,7 @@ def get(conn: sqlite3.Connection, slug: str) -> Website | None:
 
 def for_user(conn: sqlite3.Connection, owner: User) -> list[Website]:
     """Every site ``owner`` has created, with its deployment state."""
-    return [_with_deployment(conn, site) for site in _dao.for_user(conn, owner.id)]
+    return _attach_deployments(conn, _dao.for_user(conn, owner.id))
 
 
 def routes(conn: sqlite3.Connection) -> list[Route]:
@@ -153,8 +167,23 @@ def routes(conn: sqlite3.Connection) -> list[Route]:
 
 def live(conn: sqlite3.Connection) -> list[Website]:
     """Every site whose latest deployment is live, for the public catalog."""
-    sites = (_with_deployment(conn, site) for site in _dao.all_sites(conn))
+    sites = _attach_deployments(conn, _dao.all_sites(conn))
     return [site for site in sites if site.status == "live"]
+
+
+def _attach_deployments(
+    conn: sqlite3.Connection, sites: list[Website]
+) -> list[Website]:
+    """Fill in each site's deployment state, in one query, not one per site."""
+    deployments = job.latest_of_grouped(
+        conn, DEPLOY_CHAIN, "slug", [site.slug for site in sites]
+    )
+    return [
+        site.model_copy(update=_deployment_state(deployments[site.slug]))
+        if site.slug in deployments
+        else site
+        for site in sites
+    ]
 
 
 def submit_file(
@@ -179,6 +208,7 @@ def submit_file(
         raise WebsiteError("The content is not valid text.") from error
     if size > MAX_FILE_BYTES:
         raise WebsiteError("Files are limited to 1 MiB.")
+    _within_file_quota(slug, path)
 
     payload = {"slug": slug, "path": path, "content": content, "user_id": owner.id}
     current = job.latest_of(conn, FILE_CHAIN, payload)
@@ -238,6 +268,26 @@ def file_deletion_state(
     payload = {"slug": slug, "path": path, "user_id": user_id}
     link = job.latest_of(conn, DELETE_FILE_CHAIN, payload)
     return _file_deletion(slug, path, link) if link else None
+
+
+def _within_file_quota(slug: str, path: str) -> None:
+    """Refuse a new file once a site is at its file limit (best-effort).
+
+    Overwrites do not count. The count is a disk read, so a burst of brand-new
+    paths can momentarily overshoot before any land — a soft cap for a shared
+    demo, not an accountant.
+    """
+    if file_target(slug, path).exists():
+        return
+    site_dir = config.DATA_DIR / slug
+    if not site_dir.is_dir():
+        return
+    files = sum(1 for entry in site_dir.rglob("*") if entry.is_file())
+    if files >= _MAX_FILES_PER_SITE:
+        raise WebsiteError(
+            f"A site can hold at most {_MAX_FILES_PER_SITE} files. "
+            "Delete one before adding another."
+        )
 
 
 def file_job_superseded(conn: sqlite3.Connection, claimed: job.Job) -> bool:
