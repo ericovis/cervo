@@ -193,7 +193,7 @@ def verification_flow():
         _text(
             320,
             166,
-            "483 921",
+            "483921",
             fill=_ACCENT,
             size=22,
             weight=600,

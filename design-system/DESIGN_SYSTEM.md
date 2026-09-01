@@ -14,8 +14,8 @@ Terminal-receipt aesthetic for all cervo-served pages (default index, future err
 | `--bg` | `#1b1a16` | `#f7f3ea` | page background |
 | `--ink` | `#f0ead8` | `#2b2820` | headings, emphasized text |
 | `--text` | `#cfc9ba` | `#4a463c` | body text, receipt values |
-| `--muted` | `#8a8574` | `#857e6e` | secondary text, labels |
-| `--accent` | `#e5a83c` | `#9a6a1f` | status, links, section labels |
+| `--muted` | `#8a8574` | `#6e6858` | secondary text, labels |
+| `--accent` | `#e5a83c` | `#8a5e19` | status, links, section labels |
 | `--rule` | `#34322b` | `#e2dac8` | section borders, chip borders |
 | `--dotted` | `#4a463c` | `#b8b09c` | receipt dotted leaders |
 | `--code-bg` | `#24221c` | `#efe8d6` | endpoint/code chips |
