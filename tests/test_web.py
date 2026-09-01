@@ -52,11 +52,23 @@ def test_the_docs_have_their_anchors(client):
     page = client.get("/docs").text
     for anchor in (
         "connecting-from-claude",
+        "signing-in",
         "getting-started",
         "updating-your-site",
         "how-deployments-work",
     ):
         assert f'id="{anchor}"' in page
+
+
+def test_the_docs_illustrate_the_setup(client):
+    page = client.get("/docs").text
+
+    # Three drawings, inline and self-contained: no external requests.
+    assert page.count("<svg") == 3
+    assert "<img" not in page
+    assert "Add custom connector" in page
+    # The dialog figure shows the address the reader has to paste.
+    assert page.count("http://localhost/mcp") >= 2
 
 
 def test_unknown_paths_get_the_styled_404(client):

@@ -73,7 +73,9 @@ Auth has no knobs: token and code lifetimes are private constants in
   custom routes after `/mcp`, so they cannot shadow it; among the pages the
   catch-all 404 route must stay registered last. The same components are the
   single source for a site's default page (`web.default_page`), which the
-  worker renders and writes at deploy time.
+  worker renders and writes at deploy time. The docs page's illustrations
+  (`web/figures.py`) are inline SVG drawn from the same theme tokens — no
+  binary assets, no external requests, and they follow the light/dark toggle.
 - `src/cervo/worker.py` — the job worker: polls for due jobs, dispatches them by
   kind (`_HANDLERS`), reaps timed-out ones. Entry point `cervo-worker`.
 - `src/cervo/config.py` — settings (see above)

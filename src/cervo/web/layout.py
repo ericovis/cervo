@@ -77,6 +77,12 @@ _PAGE_CSS = """
   .prompts > div { display: flex; gap: 10px; }
   .prompts .caret { color: var(--accent); }
   .prompts .prompt-text { color: var(--ink); }
+  /* ── figures ── */
+  figure { margin: 16px 0 0; }
+  figure svg { display: block; width: 100%; height: auto; font-family: inherit; }
+  figcaption { margin-top: 8px; color: var(--muted); font-size: 12px; }
+  .steps figure { margin: 14px 0 4px; }
+  .note { color: var(--muted); }
   /* ── footer ── */
   .fine p { font-size: 12px; color: var(--muted); max-width: none; }
   .footer-links { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 12px; font-size: 12px; }
