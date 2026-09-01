@@ -47,7 +47,7 @@ services:
   # literal "n" — a one-line, unparseable Caddyfile that crash-loops caddy.
   # A list reaches the shell verbatim, so the newlines survive.
   caddy:
-    image: caddy:latest
+    image: docker.io/library/caddy:latest
     # Unprivileged as in production (the sysctl re-allows :80/:443), state
     # in /tmp — and started after the worker, whose image seeds the fresh
     # data volume with the unprivileged owner the stub write needs.
@@ -69,7 +69,7 @@ services:
     volumes:
       - data:/mnt/data
   mail:
-    image: schickling/mailcatcher:latest
+    image: docker.io/schickling/mailcatcher:latest
 
 volumes:
   data:
