@@ -63,7 +63,8 @@ Auth has no knobs: token and code lifetimes are private constants in
 ## Layout
 
 - `src/cervo/server.py` — the FastMCP instance (`app`, constructed with
-  `auth=CervoOAuthProvider()`) and all tool definitions. There is no sign-in
+  `auth=CervoOAuthProvider()`) and all tool definitions. Tools are plain
+  text/structured tools — no MCP apps, no UI resources. There is no sign-in
   tool: every MCP request carries a Bearer token or is refused with a 401 at
   the transport, and tools resolve the owner from the token (`_owner`).
 - `src/cervo/web/` — the public website: pages built from FastHTML fasttags on
@@ -92,8 +93,8 @@ Auth has no knobs: token and code lifetimes are private constants in
   the worker's, and `setup`. Everything is a no-op without the API key.
 - `src/cervo/caddy.py` — rendering the Caddyfile from the database and reloading
   caddy over its admin API
-- `src/cervo/templates/` — jinja2 templates: the Caddyfile and the MCP app
-  pages (deployment progress, websites overview)
+- `src/cervo/templates/` — jinja2 templates: the Caddyfile, plus the theme
+  token block (`_tokens.css`) the website's pages inline
 - `src/cervo/__init__.py` — `main()` entrypoint (the `app` service): creates
   the tables, then hands uvicorn the `cervo.asgi:application` import string
 - `src/cervo/asgi.py` — the ASGI app uvicorn's workers import; built with
@@ -199,8 +200,7 @@ Because the deployment is now stepwise, a site also reports `step`,
 progress: when the client sent a `progressToken`, the tool follows the chain
 with `ctx.report_progress` (one notification per step) and returns the site
 already `live` (or `failed`); without a token it returns immediately as
-status `pending`, and the deployment MCP app or `list_websites` follows
-instead.
+status `pending`, and `list_websites` follows instead.
 
 Job lifecycle: `pending → running → done`, or on failure back to `pending` with
 `attempts + 1` and a retry delay, until `failed` for good after `_MAX_ATTEMPTS`.

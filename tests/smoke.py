@@ -40,7 +40,6 @@ TOOLS = {
     "delete_file",
     "list_websites",
     "delete_website",
-    "website_status",
 }
 
 
@@ -369,24 +368,6 @@ async def test_the_homepage_catalogs_live_sites():
     page = _get(f"http://{DOMAIN}/")
     assert slug in page
     assert f"http://{slug}.{DOMAIN}" in page
-
-
-async def test_the_progress_app_can_follow_a_deployment():
-    slug = unique("watched")
-    async with chat(f"{unique('owner')}@example.com") as owner:
-        await owner.call_tool("create_website", {"slug": slug})
-        await wait_for_deployment(owner, slug)
-
-        # the progress app polls website_status from the owner's own session
-        result = await owner.call_tool("website_status", {"slug": slug})
-        site = json.loads(result.content[0].text)
-        assert site["status"] == "live"
-        assert site["url"] == f"http://{slug}.{DOMAIN}"
-
-    # and website_status is owner-scoped: a stranger cannot read it
-    async with chat(f"{unique('stranger')}@example.com") as stranger:
-        with pytest.raises(ToolError, match="no site"):
-            await stranger.call_tool("website_status", {"slug": slug})
 
 
 async def test_a_slug_cannot_be_taken_from_its_owner():

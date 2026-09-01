@@ -1,9 +1,8 @@
 """Shared page chrome: the "deploy receipt" design system in fasttags.
 
-The theme variables come from one file, ``templates/_tokens.css`` (the
-MCP-app templates include the very same file); the rest of the CSS and the
-theme scripts are carried inline here, so every page is self-contained and
-makes zero external requests.
+The theme variables come from one file, ``templates/_tokens.css``; the
+rest of the CSS and the theme scripts are carried inline here, so every
+page is self-contained and makes zero external requests.
 """
 
 from importlib import resources
@@ -34,7 +33,7 @@ from fasthtml.common import (
 from starlette.responses import HTMLResponse
 
 # The theme variables live in one file so every page shares them; see
-# templates/_tokens.css. The MCP-app templates include the same file.
+# templates/_tokens.css.
 _TOKENS_CSS = resources.files("cervo").joinpath("templates", "_tokens.css").read_text()
 
 _PAGE_CSS = """

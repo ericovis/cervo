@@ -5,10 +5,8 @@ from time import monotonic
 from typing import Annotated
 
 from fastmcp import Context, FastMCP
-from fastmcp.apps import AppConfig, ResourceCSP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_access_token
-from jinja2 import Environment, PackageLoader
 from pydantic import Field
 
 from cervo import auth, db, monitoring, user, web, website
@@ -24,17 +22,6 @@ app = FastMCP("cervo", auth=auth.CervoOAuthProvider())
 # Unexpected failures inside MCP operations go to Honeybadger before FastMCP
 # masks them into protocol errors; deliberate refusals (ToolError) do not.
 app.add_middleware(monitoring.ReportMCPErrors())
-
-_env = Environment(loader=PackageLoader("cervo"), autoescape=True)
-
-# The deployment-progress app: clients that support MCP apps render this UI
-# for create_website's result, and it polls website_status until the site
-# settles. Clients that do not simply read the tool results as usual.
-_DEPLOYMENT_URI = "ui://cervo/deployment.html"
-
-# The websites-overview app: the same idea for list_websites — every site the
-# signed-in user owns, with unsettled deployments followed live.
-_WEBSITES_URI = "ui://cervo/websites.html"
 
 # Following a deployment from create_website: how often to look, and for how
 # long before handing off to list_websites (the deployment runs on either way).
@@ -157,7 +144,7 @@ async def _follow_deployment(ctx: Context, site: website.Website) -> website.Web
     return await _follow(ctx, site, refresh, _progress_message, ("live", "failed"))
 
 
-@app.tool(app=AppConfig(resource_uri=_DEPLOYMENT_URI))
+@app.tool
 async def create_website(slug: website.Slug, ctx: Context) -> website.Website:
     """Create a static site owned by the connected account.
 
@@ -261,7 +248,7 @@ async def delete_file(
     )
 
 
-@app.tool(app=AppConfig(resource_uri=_WEBSITES_URI))
+@app.tool
 def list_websites() -> list[website.Website]:
     """List every site the connected account owns.
 
@@ -298,50 +285,6 @@ def delete_website(slug: website.Slug) -> str:
         f"The site {slug!r} was deleted. Its files and routing are being "
         "removed in the background."
     )
-
-
-@app.tool(app=AppConfig(visibility=["app"]))
-def website_status(slug: website.Slug) -> website.Website:
-    """Report a site's deployment state, for the progress UI.
-
-    Only the deployment app calls this — it polls while the page is open,
-    scoped to the connected account just as list_websites is. Agents should
-    use list_websites instead. A slug the account does not own reads the
-    same as one that does not exist, so this never reveals another owner's
-    site or its state.
-    """
-    with connect() as conn:
-        owner = _owner(conn)
-        site = website.get(conn, slug)
-    if site is None or site.user_id != owner.id:
-        raise ToolError(f"There is no site with the slug {slug!r}.")
-    return site
-
-
-@app.resource(
-    _DEPLOYMENT_URI,
-    app=AppConfig(csp=ResourceCSP(resource_domains=["https://unpkg.com"])),
-)
-def deployment_view() -> str:
-    """The deployment-progress UI, rendered on cervo's design system.
-
-    All of its data arrives at runtime: the create_website result seeds the
-    page, then it follows the deployment through website_status.
-    """
-    return _env.get_template("deployment.html.j2").render()
-
-
-@app.resource(
-    _WEBSITES_URI,
-    app=AppConfig(csp=ResourceCSP(resource_domains=["https://unpkg.com"])),
-)
-def websites_view() -> str:
-    """The websites-overview UI, rendered on cervo's design system.
-
-    All of its data arrives at runtime: the list_websites result fills the
-    page, and unsettled deployments are followed through website_status.
-    """
-    return _env.get_template("websites.html.j2").render()
 
 
 web.register(app)
