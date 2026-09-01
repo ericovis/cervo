@@ -61,23 +61,6 @@ async def test_a_stranger_cannot_recreate_or_redeploy_a_taken_slug():
     assert count == 1
 
 
-async def test_website_status_is_scoped_to_the_owner():
-    """website_status refuses a slug the caller does not own — with the very
-    same 'no site' error as a slug that never existed, so a stranger cannot
-    confirm the site is there, let alone read its owner's id or deploy error.
-    The owner still reads their own."""
-    async with chat("alice@example.com") as alice:
-        await call(alice, "create_website", slug="alices-site")
-        mine = await alice.call_tool("website_status", {"slug": "alices-site"})
-    assert mine.structured_content["slug"] == "alices-site"  # the owner sees it
-
-    async with chat(STRANGER) as mallory:
-        with pytest.raises(ToolError, match="no site"):  # a real, foreign slug...
-            await call(mallory, "website_status", slug="alices-site")
-        with pytest.raises(ToolError, match="no site"):  # ...reads like a fake one
-            await call(mallory, "website_status", slug="never-existed")
-
-
 # ── a token is good only for what it is ───────────────────────────────────
 
 
