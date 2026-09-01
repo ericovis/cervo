@@ -13,6 +13,7 @@ from fasthtml.common import (
     A,
     Body,
     Button,
+    Code,
     Dd,
     Div,
     Dl,
@@ -23,6 +24,7 @@ from fasthtml.common import (
     Main,
     Meta,
     P,
+    Pre,
     Script,
     Section,
     Span,
@@ -43,6 +45,8 @@ _PAGE_CSS = """
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     font-size: 13px; line-height: 1.65;
   }
+  /* The one width in the design: prose, receipts, and figures all run
+     the full column, so nothing sits at a different measure. */
   main { max-width: 640px; margin: 0 auto; padding: 44px 24px 56px; }
   a { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
   a:hover { color: var(--ink); }
@@ -59,7 +63,7 @@ _PAGE_CSS = """
   /* ── hero ── */
   .status { margin: 40px 0 0; font-size: 12px; letter-spacing: 0.12em; color: var(--accent); }
   h1 { font-size: 26px; color: var(--ink); font-weight: 600; margin: 10px 0 14px; overflow-wrap: anywhere; }
-  .intro { margin: 0; color: var(--muted); max-width: 54ch; }
+  .intro { margin: 0; color: var(--muted); }
   /* ── receipt ── */
   .receipt { margin: 24px 0 0; display: flex; flex-direction: column; gap: 10px; }
   .receipt > div { display: flex; align-items: baseline; gap: 10px; }
@@ -69,7 +73,7 @@ _PAGE_CSS = """
   /* ── sections ── */
   section { margin-top: 42px; border-top: 1px solid var(--rule); padding-top: 24px; scroll-margin-top: 16px; }
   h2 { font-size: 11px; letter-spacing: 0.18em; color: var(--accent); font-weight: 400; margin: 0; }
-  section p { margin: 10px 0 0; max-width: 56ch; }
+  section p { margin: 10px 0 0; }
   .endpoint { display: inline-block; margin: 14px 0 0; padding: 10px 16px; background: var(--code-bg); border: 1px solid var(--rule); border-radius: 6px; overflow-wrap: anywhere; }
   .endpoint a { text-decoration: none; }
   .steps { margin: 12px 0 0; padding-left: 22px; display: flex; flex-direction: column; gap: 8px; }
@@ -77,8 +81,15 @@ _PAGE_CSS = """
   .prompts > div { display: flex; gap: 10px; }
   .prompts .caret { color: var(--accent); }
   .prompts .prompt-text { color: var(--ink); }
+  .command { margin: 10px 0 0; padding: 10px 14px; background: var(--code-bg); border: 1px solid var(--rule); border-radius: 6px; overflow-x: auto; font-size: 12px; color: var(--ink); }
+  /* ── figures ── */
+  figure { margin: 16px 0 0; }
+  figure svg { display: block; width: 100%; height: auto; font-family: inherit; }
+  figcaption { margin-top: 8px; color: var(--muted); font-size: 12px; }
+  .steps figure { margin: 14px 0 4px; }
+  .note { color: var(--muted); }
   /* ── footer ── */
-  .fine p { font-size: 12px; color: var(--muted); max-width: none; }
+  .fine p { font-size: 12px; color: var(--muted); }
   .footer-links { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 12px; font-size: 12px; }
   @media (max-width: 480px) { h1 { font-size: 22px; } }
 """
@@ -178,6 +189,11 @@ def endpoint_chip(url: str):
     return Div(A(url, href=url), cls="endpoint")
 
 
+def command(text: str):
+    """A shell command, framed to be copied — it scrolls rather than wraps."""
+    return Pre(Code(text), cls="command")
+
+
 def prompts(*texts: str):
     """Example things to say to an AI, carets and all."""
     return Div(
@@ -201,7 +217,7 @@ def _footer(base: str):
     return Section(
         H2("ABOUT CERVO"),
         P(
-            A("Cervo", href="https://github.com/ericovis/cervo"),
+            A("cervo", href="https://github.com/ericovis/cervo"),
             " is a demo app for managing static website hosting on a shared "
             "VPS, created by Eric Magalhães a.k.a. ",
             A("ericovis", href="https://github.com/ericovis"),

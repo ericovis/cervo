@@ -8,7 +8,7 @@ connected. Wrong-code errors re-render the form; a dead transaction gets a
 page telling the user to reconnect from Claude.
 """
 
-from fasthtml.common import A, Button, Form, Input, P, Style
+from fasthtml.common import A, Button, Form, Input, Label, P, Span, Style
 from pydantic import EmailStr, TypeAdapter, ValidationError
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
@@ -33,8 +33,10 @@ def _no_store(response: Response) -> Response:
 _FORM_CSS = """
 .verify { display: flex; flex-direction: column; gap: 14px; max-width: 420px; }
 .verify label { font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted, inherit); }
-.verify input { padding: 10px 14px; font: inherit; color: inherit; background: var(--code-bg); border: 1px solid var(--rule); border-radius: 6px; }
+.verify input[type="email"], .verify input[type="text"] { padding: 10px 14px; font: inherit; color: inherit; background: var(--code-bg); border: 1px solid var(--rule); border-radius: 6px; }
 .verify input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.verify .consent { display: flex; align-items: flex-start; gap: 10px; color: var(--muted); cursor: pointer; text-transform: none; letter-spacing: normal; font-size: 12px; }
+.verify .consent input { flex: none; width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--accent); }
 .verify button { padding: 10px 16px; font: inherit; font-weight: 600; cursor: pointer; color: inherit; background: transparent; border: 1px solid var(--accent); border-radius: 6px; }
 .verify .error { color: var(--accent); }
 """
@@ -56,6 +58,8 @@ async def submit_email(request: Request) -> Response:
     form = await request.form()
     txn_id = str(form.get("txn", ""))
     address = str(form.get("email", "")).strip()
+    # The checkbox is "required" in the markup, which only binds a browser.
+    accepted = form.get("accept") is not None
 
     try:
         address = _EMAIL.validate_python(address)
@@ -65,6 +69,17 @@ async def submit_email(request: Request) -> Response:
                 txn_id,
                 email=address,
                 error="That does not look like an email address.",
+                accepted=accepted,
+            )
+        )
+
+    if not accepted:
+        return _no_store(
+            _email_page(
+                txn_id,
+                email=address,
+                error="Please accept the terms of service and the privacy "
+                "policy to continue.",
             )
         )
 
@@ -99,7 +114,10 @@ async def submit_code(request: Request) -> Response:
 
 
 def _email_page(
-    txn_id: str, email: str | None = None, error: str | None = None
+    txn_id: str,
+    email: str | None = None,
+    error: str | None = None,
+    accepted: bool = False,
 ) -> HTMLResponse:
     return layout.page(
         "sign in — cervo",
@@ -123,18 +141,29 @@ def _email_page(
                     required=True,
                     autofocus=True,
                 ),
+                # Wrapping the input in its label needs no "for", and makes
+                # the whole sentence a click target.
+                Label(
+                    Input(
+                        type="checkbox",
+                        name="accept",
+                        value="yes",
+                        required=True,
+                        checked=accepted,
+                    ),
+                    Span(
+                        "I agree to the ",
+                        A("terms of service", href="/terms"),
+                        " and the ",
+                        A("privacy policy", href="/privacy"),
+                        ".",
+                    ),
+                    cls="consent",
+                ),
                 Button("Send the code"),
                 action="/verify/email",
                 method="post",
                 cls="verify",
-            ),
-            P(
-                "By connecting you agree to the ",
-                A("terms of service", href="/terms"),
-                " and the ",
-                A("privacy policy", href="/privacy"),
-                ".",
-                cls="intro",
             ),
         ),
     )

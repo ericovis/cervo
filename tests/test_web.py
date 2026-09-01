@@ -27,9 +27,11 @@ def test_every_page_is_served_on_the_design_system(client, path):
     assert "--accent" in response.text  # the design system's token block
 
 
-def test_the_homepage_points_at_the_mcp_endpoint(client):
+def test_the_homepage_sends_people_to_the_docs(client):
+    # Setup lives in one place: the homepage points, the docs explain.
     page = client.get("/").text
-    assert "http://localhost/mcp" in page
+    assert 'href="/docs"' in page
+    assert "http://localhost/mcp" not in page
 
 
 def test_the_catalog_starts_empty(client):
@@ -52,11 +54,38 @@ def test_the_docs_have_their_anchors(client):
     page = client.get("/docs").text
     for anchor in (
         "connecting-from-claude",
+        "signing-in",
         "getting-started",
         "updating-your-site",
+        "limitations",
         "how-deployments-work",
     ):
         assert f'id="{anchor}"' in page
+
+
+def test_the_docs_cover_both_ways_in(client):
+    page = client.get("/docs").text
+
+    assert "Add custom connector" in page  # the claude.ai route
+    # The CLI route, at user scope: cervo in every session, not one project.
+    assert "claude mcp add --scope user --transport http cervo" in page
+
+
+def test_the_docs_state_what_can_be_published(client):
+    page = client.get("/docs").text
+    assert "only .html and .css files can be published" in page
+    assert "1 MiB" in page
+
+
+def test_the_docs_illustrate_the_setup(client):
+    page = client.get("/docs").text
+
+    # Three drawings, inline and self-contained: no external requests.
+    assert page.count("<svg") == 3
+    assert "<img" not in page
+    assert "Add custom connector" in page
+    # The dialog figure shows the address the reader has to paste.
+    assert page.count("http://localhost/mcp") >= 2
 
 
 def test_unknown_paths_get_the_styled_404(client):

@@ -53,7 +53,8 @@ async def test_submitting_the_email_advances_to_the_code_form(mailbox):
         page = await web.get(f"/verify?txn={flow.txn}")
         assert 'name="email"' in page.text
         assert page.headers["cache-control"] == "no-store"
-        # connecting is agreeing to the terms, and the page says so
+        # agreeing to the terms is a tick box on the form, not fine print
+        assert 'name="accept"' in page.text
         assert 'href="/terms"' in page.text
         assert 'href="/privacy"' in page.text
 
@@ -64,6 +65,25 @@ async def test_submitting_the_email_advances_to_the_code_form(mailbox):
         page = await web.get(response.headers["location"])
         assert 'name="code"' in page.text, "the code form did not appear"
         assert page.headers["cache-control"] == "no-store"
+
+
+async def test_no_code_is_sent_until_the_terms_are_accepted(mailbox):
+    """The tick box is "required" in the markup, which only binds a browser."""
+    async with serving() as web:
+        flow = Flow(web)
+        await flow.authorize()
+
+        response = await flow.submit_email(OWNER, accept=False)
+
+        assert response.status_code == 200  # the form again, not the code step
+        assert "Please accept the terms" in response.text
+        assert 'name="code"' not in response.text
+        assert mailbox == [], "a code was mailed without consent"
+        # the address survives the refusal, so it need not be typed again
+        assert OWNER in response.text
+
+        assert (await flow.submit_email(OWNER)).status_code == 303
+        assert mailbox.last.to == OWNER
 
 
 async def test_the_email_links_back_to_the_sign_in_page(mailbox):

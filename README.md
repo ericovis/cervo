@@ -32,6 +32,9 @@ Once deployed (see below), add cervo as a custom connector:
    email and type back the six-digit code from your inbox. The connection
    then stays signed in on its own.
 
+The same four steps, written for users and illustrated, are on the deployed
+instance's `/docs` page.
+
 ## Deploying
 
 Production is the same image on a VPS, run by rootful [podman

@@ -137,7 +137,10 @@ class Flow:
         return self.txn
 
     def submit_email(self, email: str) -> httpx.Response:
-        return self.web.post("/verify/email", data={"txn": self.txn, "email": email})
+        return self.web.post(
+            "/verify/email",
+            data={"txn": self.txn, "email": email, "accept": "yes"},
+        )
 
     def submit_code(self, code: str) -> httpx.Response:
         return self.web.post("/verify/code", data={"txn": self.txn, "code": code})
@@ -342,12 +345,13 @@ async def test_a_followed_creation_reports_progress_and_returns_live():
 def test_the_homepage_is_served():
     page = _get(f"http://{DOMAIN}/")
     assert ">cervo</a>" in page  # the wordmark
-    assert f"http://{DOMAIN}/mcp" in page  # the endpoint chip
-    assert 'href="/docs"' in page
+    assert 'href="/docs"' in page  # setup lives in the docs, not here
 
 
 def test_docs_terms_and_privacy_are_served():
-    assert "HOW DEPLOYMENTS WORK" in _get(f"http://{DOMAIN}/docs")
+    docs = _get(f"http://{DOMAIN}/docs")
+    assert "HOW DEPLOYMENTS WORK" in docs
+    assert f"http://{DOMAIN}/mcp" in docs  # the endpoint chip
     assert "TERMS OF SERVICE" in _get(f"http://{DOMAIN}/terms")
     assert "PRIVACY" in _get(f"http://{DOMAIN}/privacy")
 
