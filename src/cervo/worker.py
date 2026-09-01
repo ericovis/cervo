@@ -270,16 +270,20 @@ def _delete_website(claimed: job.Job) -> None:
     steps are idempotent, so a retried deletion is safe. The directory is
     removed only if the slug is still free — a slug reclaimed before this
     job runs (its cleanup delayed by a retry, say) keeps the new owner's
-    files, the same guarantee delete_file makes.
+    files, the same guarantee delete_file makes. Reclamation is re-checked
+    right before the removal, not at job start, so a slug re-taken during
+    the caddy reload keeps its fresh files (the check-to-rmtree window is
+    then microseconds, the same accepted window the file jobs carry).
     """
     slug = claimed.payload["slug"]
     with connect() as conn:
         sites = website.routes(conn)
-        reclaimed = website.exists(conn, slug)
     caddy.render(sites)
     caddy.reload()
 
     site_dir = config.DATA_DIR / slug
+    with connect() as conn:
+        reclaimed = website.exists(conn, slug)
     if not reclaimed and site_dir.exists():
         shutil.rmtree(site_dir)
 
