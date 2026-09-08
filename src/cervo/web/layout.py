@@ -24,6 +24,7 @@ from fasthtml.common import (
     Head,
     Header,
     Html,
+    Link,
     Main,
     Meta,
     P,
@@ -168,6 +169,17 @@ def document(
                 Meta(name="viewport", content="width=device-width, initial-scale=1"),
                 Title(title),
                 *brand.head_tags(title, description, base),
+                # The machine-readable summary of cervo, linked so an
+                # assistant handed nothing but a URL finds it without
+                # guessing (web/agents.py). Prefixed with base like every
+                # other link, so a hosted site's default page points at
+                # cervo's file rather than looking for one of its own.
+                Link(
+                    rel="alternate",
+                    type="text/plain",
+                    href=f"{base}/llms.txt",
+                    title="llms.txt",
+                ),
                 Style(_TOKENS_CSS + _PAGE_CSS),
                 Script(_THEME_BOOT_JS),
             ),

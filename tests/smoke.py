@@ -348,6 +348,7 @@ def test_the_homepage_is_served():
     assert 'href="/favicon.svg"' in page  # the brand's icons
     assert f'content="http://{DOMAIN}/og-image-1200x630.png"' in page  # the card
     assert 'href="/docs"' in page  # setup lives in the docs, not here
+    assert f"http://{DOMAIN}/mcp" in page  # except the endpoint, for machines
 
 
 def test_the_brand_files_are_served():
@@ -364,6 +365,21 @@ def test_the_brand_files_are_served():
         assert response.status == 200, path
         assert response.headers["content-type"] == media_type, path
         assert len(response.read()) > 0, path
+
+
+def test_robots_and_llms_txt_are_served_through_caddy():
+    # The two files a machine fetches on its own, ahead of the catch-all.
+    robots = _get(f"http://{DOMAIN}/robots.txt")
+    assert "User-agent: *" in robots
+    assert f"http://{DOMAIN}/llms.txt" in robots
+
+    # llms.txt has to stand on its own: an assistant given cervo's URL and
+    # nothing else should be able to act after this single fetch.
+    llms = _get(f"http://{DOMAIN}/llms.txt")
+    assert f"http://{DOMAIN}/mcp" in llms  # where to connect
+    assert ".html` and `.css`" in llms  # what may be published
+    for name in TOOLS:  # what to call, once connected
+        assert name in llms, name
 
 
 def test_docs_terms_and_privacy_are_served():
