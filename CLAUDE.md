@@ -76,6 +76,17 @@ Auth has no knobs: token and code lifetimes are private constants in
   worker renders and writes at deploy time. The docs page's illustrations
   (`web/figures.py`) are inline SVG drawn from the same theme tokens — no
   binary assets, no external requests, and they follow the light/dark toggle.
+- `src/cervo/web/agents.py` — the two files a machine fetches on its own:
+  `/robots.txt` (everything public but `/verify`, and a comment pointing at
+  the other one) and `/llms.txt`, the llmstxt.org convention. `llms.txt` is
+  deliberately complete rather than a table of links — an assistant handed
+  nothing but cervo's URL gets the endpoint, the Claude-only auth shape, the
+  five tool signatures, and the publishing limits in that one fetch. It is
+  linked from every page's `<head>` (prefixed with `base`, so a hosted site's
+  default page points at the apex), and the homepage carries the MCP endpoint
+  in its body for the same reason: an assistant reads the page it was given
+  and nothing else. `tests/test_web.py` asks the server itself for the tool
+  names, so the prose cannot drift.
 - `src/cervo/web/brand.py` + `src/cervo/brand/` — the brand: the antler mark,
   inlined into every header in `currentColor`, and the icon/preview files —
   the one place cervo serves real assets, since browsers and social scrapers

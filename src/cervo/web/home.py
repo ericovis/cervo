@@ -3,7 +3,7 @@
 from fasthtml.common import A, P
 from starlette.responses import HTMLResponse
 
-from cervo import db, website
+from cervo import config, db, website
 from cervo.web import layout
 
 
@@ -28,7 +28,32 @@ async def home_page() -> HTMLResponse:
                 " walks through every step, with pictures.",
             ),
         ),
+        layout.section("FOR AN AI ASSISTANT", *_for_assistants()),
         layout.section("SITES ON CERVO", *_catalog(sites)),
+    )
+
+
+def _for_assistants():
+    """The endpoint, in the body of the homepage rather than only the docs.
+
+    The docs still do the explaining, for a person. This section exists
+    because of what happens when someone pastes cervo's bare URL into a
+    chat: the assistant reads this page and nothing else, and a page that
+    only says "see the documentation" leaves it with nothing to act on.
+    One address and one pointer are enough to change that.
+    """
+    return (
+        P(
+            "cervo is an MCP server, so the assistant does the work. Point "
+            "yours at this address — it is the whole of the setup:"
+        ),
+        layout.endpoint_chip(f"{config.origin()}/mcp"),
+        P(
+            "How to connect, the tools, and the rules about what may be "
+            "published are all in ",
+            A("llms.txt", href="/llms.txt"),
+            ", written for machines to read in one fetch.",
+        ),
     )
 
 
