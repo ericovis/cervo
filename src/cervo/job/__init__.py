@@ -15,6 +15,7 @@ from cervo.job.service import (
     newest_id,
     prune,
     reap,
+    rename_kind,
     serialize,
     succeed,
 )
@@ -34,6 +35,7 @@ __all__ = [
     "newest_id",
     "prune",
     "reap",
+    "rename_kind",
     "serialize",
     "succeed",
 ]

@@ -43,11 +43,16 @@ def test_smtp_is_never_reached(mailbox):
     assert mailbox.last_code == "424242"
 
 
-def test_caddy_is_never_reached(caddy_reloads):
-    """`caddy.reload` is replaced, so nothing can reach the admin API."""
-    assert caddy.reload.__name__ == "fake_reload"
-    caddy.reload()
-    assert caddy_reloads == [True]
+def test_caddy_is_never_reached(caddy_api):
+    """`caddy._api` is replaced, so no call can leave for the admin API.
+
+    Every request the module makes goes through that one function, so the
+    fake standing in for it is the whole guarantee.
+    """
+    assert caddy._api.__name__ == "fake_api"
+    assert caddy.sync([]) is True  # written into memory, never onto a socket
+    assert ("PUT", "/config/apps") in caddy_api.calls
+    assert caddy_api.object("cervo") is not None
 
 
 def test_honeybadger_is_never_reached(reports):

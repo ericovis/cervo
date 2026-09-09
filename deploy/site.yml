@@ -94,6 +94,19 @@
         group: "1000"
         recurse: true
 
+    # Earlier versions gave caddy a config file: one rendered into the data
+    # volume, and later a static one copied to /etc/cervo. Caddy now boots
+    # with no config file at all — the worker writes its whole config over
+    # the admin API — so nothing reads either; leaving them would only
+    # confuse the next reader.
+    - name: Remove the Caddyfiles earlier versions left behind
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ data_volume.stdout }}/Caddyfile"
+        - /etc/cervo/Caddyfile
+
     # A lost container network (a prune while debugging, a backend
     # migration) leaves cervo-network.service "active" while podman knows
     # nothing of it — and then no container can start. Recreate it before
@@ -110,16 +123,21 @@
         state: restarted
       when: network_exists.rc == 1
 
-    # Worker first: its startup heal re-renders the Caddyfile from the
-    # database with the freshly deployed template. Caddy after, so it reads
-    # the new file even when the reload API was not up during the heal.
+    # Caddy first: --resume brings it back serving exactly what it served, so
+    # the restart costs a second or two of refused connections on :80/:443 and
+    # nothing else — no site is unrouted by it. Then the worker, whose startup
+    # sync rewrites caddy's whole config from the database — which is also the
+    # migration for a caddy whose autosave still holds the old rendered config
+    # (an "srv0" server, untagged site routes): the entire apps tree is
+    # replaced in one call, so nothing old survives it and no two servers can
+    # end up fighting over :443. Then the app.
     - name: Restart the services
       ansible.builtin.systemd_service:
         name: "{{ item }}"
         state: restarted
       loop:
-        - cervo-worker.service
         - cervo-caddy.service
+        - cervo-worker.service
         - cervo-app.service
 
     # Everything below needs the Honeybadger project key and is skipped

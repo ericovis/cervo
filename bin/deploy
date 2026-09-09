@@ -8,6 +8,10 @@
 #
 # Rollback is rerunning the playbook with an older tag:
 #   ansible-playbook -i deploy/inventory.yml deploy/site.yml -e image_tag=<sha>
+# Traffic survives one either way. A rollback to a revision older than the
+# two-step deployment chain does leave every site reading "deploying" in the
+# tools until you roll forward again: their job rows were renamed on the way
+# in, and the older code does not know the kind they were renamed to.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

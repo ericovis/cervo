@@ -1,7 +1,16 @@
+# The settings cervo builds its URLs — and caddy's config — from. Read from
+# the host environment (or a .env file) in one place, so the server and the
+# worker cannot disagree. Caddy needs none of them: it is told what to serve.
+x-site: &site
+  DOMAIN: ${DOMAIN:-localhost}
+  SCHEME: ${SCHEME:-http}
+  ACME_EMAIL: ${ACME_EMAIL:-}
+
 services:
   app:
     build: .
     restart: unless-stopped
+    environment: *site
     volumes:
       - .data:/mnt/data
       - ./src:/app/src
@@ -13,26 +22,34 @@ services:
     build: .
     command: cervo-worker
     restart: unless-stopped
+    environment: *site
     volumes:
       - .data:/mnt/data
       - ./src:/app/src
   caddy:
     image: docker.io/library/caddy:latest
-    command: caddy run --config /mnt/data/Caddyfile --adapter caddyfile
     restart: unless-stopped
     # Unprivileged inside the container; the sysctl lets it still bind :80
     # and :443. Its state goes to /tmp — development keeps no certificates.
     user: "1000:1000"
     sysctls:
       net.ipv4.ip_unprivileged_port_start: 80
+    # No config file anywhere: caddy comes up with whatever it last saved
+    # (--resume, from $XDG_CONFIG_HOME/caddy/autosave.json) and the worker
+    # writes the whole config — cervo's proxy and every site — over the
+    # admin API. On a fresh checkout that means a few seconds serving
+    # nothing, until the worker's startup sync lands. None of the site
+    # settings reach this container: the database and cervo decide them.
+    command: caddy run --resume
     environment:
+      CADDY_ADMIN: 0.0.0.0:2019
       XDG_DATA_HOME: /tmp/caddy
       XDG_CONFIG_HOME: /tmp/caddy
     ports:
       - 80:80
       - 443:443
     volumes:
-      - .data:/mnt/data
+      - .data:/mnt/data  # the sites' files, served straight off the volume
   mail:
     image: docker.io/schickling/mailcatcher:latest
     ports:

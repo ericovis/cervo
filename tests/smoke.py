@@ -9,7 +9,10 @@ and sign-in against ``http://{DOMAIN}`` (this runner shares caddy's network
 namespace, so localhost is the front door), verification codes read from
 mailcatcher's API the way a user reads their inbox, the MCP endpoint reached
 with the minted Bearer token, and deployed sites fetched via caddy with a
-Host header.
+Host header. Sharing that namespace also puts caddy's admin API within reach
+at ``http://localhost:2019``, which is how the checks below look at the config
+the worker writes — cervo's own proxy and every site live there, in no file
+at all.
 """
 
 import asyncio
@@ -19,6 +22,7 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -32,6 +36,7 @@ from fastmcp.exceptions import ToolError
 
 DOMAIN = os.environ.get("DOMAIN", "localhost")
 MAIL_API = "http://mail:1080"
+CADDY_ADMIN = "http://localhost:2019"  # caddy's own namespace, shared here
 CALLBACK = "http://localhost:33418/callback"
 
 TOOLS = {
@@ -60,14 +65,66 @@ def _wait_for(check, what: str, timeout: float = 60):
             time.sleep(1)
 
 
+def _admin(method: str, path: str) -> tuple[int, object]:
+    """One call to caddy's admin API, the way the worker makes it.
+
+    Returns the status alongside the parsed body, because a 404 is an
+    answer here — it is how "caddy does not have this object" reads.
+    """
+    request = urllib.request.Request(f"{CADDY_ADMIN}{path}", method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            body = response.read().decode().strip()
+            return response.status, json.loads(body) if body else None
+    except urllib.error.HTTPError as error:
+        return error.code, error.read().decode()
+
+
+def _cervo_sync() -> str:
+    """Ask for a reconciliation the way an operator does; what it printed.
+
+    This container shares the data volume, so the command reaches the very
+    database the worker polls — the same invocation an operator runs inside
+    the worker container ("uv run cervo-sync": the venv's scripts are not
+    on PATH). Kept out of the async test so it blocks nothing but itself.
+    """
+    done = subprocess.run(
+        ["uv", "run", "cervo-sync"],
+        capture_output=True,
+        text=True,
+        cwd="/app",
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    return done.stdout
+
+
+def _serves(slug: str) -> bool:
+    """Whether caddy answers this site's hostname with the site's own page.
+
+    Without a route for the host, caddy answers the request itself — an
+    empty 200 — so "served" means the page is actually there.
+    """
+    try:
+        return slug in _get(f"http://{DOMAIN}/", host=f"{slug}.{DOMAIN}")
+    except urllib.error.HTTPError:
+        return False
+
+
 @pytest.fixture(scope="module", autouse=True)
 def front_door():
-    """Wait out the first boot: caddy serves a stub until the worker's render."""
+    """Wait out the first boot: caddy comes up serving nothing at all.
+
+    There is no config file — caddy resumes what it last saved, and a fresh
+    stack has nothing to resume — so the apex proxy only exists once the
+    worker's startup sync has written it. That is a boot, a table creation,
+    and a poll away, hence the generous window.
+    """
 
     def answers() -> None:
         assert "cervo" in _get(f"http://{DOMAIN}/")
 
-    _wait_for(answers, "caddy to proxy cervo")
+    _wait_for(answers, "the worker's first sync to put cervo's proxy in caddy", 120)
 
 
 def unique(prefix: str) -> str:
@@ -338,8 +395,8 @@ async def test_a_followed_creation_reports_progress_and_returns_live():
     assert site["status"] == "live", site
     assert updates, "no progress notifications arrived"
     steps = [progress for progress, _, _ in updates]
-    assert steps[0] == 0 and steps[-1] == 3
-    assert all(total == 3 for _, total, _ in updates)
+    assert steps[0] == 0 and steps[-1] == 2
+    assert all(total == 2 for _, total, _ in updates)
 
 
 def test_the_homepage_is_served():
@@ -460,3 +517,70 @@ async def test_an_unknown_subdomain_serves_no_site():
     except urllib.error.HTTPError:
         return
     assert "live on cervo" not in body
+
+
+def test_cervos_own_proxy_is_a_route_in_caddys_running_config():
+    """The apex is written from the database's side too, not from a file."""
+    status, route = _admin("GET", "/id/cervo")
+    assert status == 200, route
+    assert route["match"] == [{"host": [DOMAIN]}]
+    assert route["handle"] == [
+        {"handler": "reverse_proxy", "upstreams": [{"dial": "app:8000"}]}
+    ]
+
+
+async def test_a_live_site_owns_a_route_in_caddys_running_config():
+    """There is no config file anywhere: a site is one route object, by id."""
+    slug = unique("routed")
+    async with chat(f"{unique('owner')}@example.com") as client:
+        await client.call_tool("create_website", {"slug": slug})
+        site = await wait_for_deployment(client, slug)
+        assert site["status"] == "live", site
+
+        status, route = _admin("GET", f"/id/site:{slug}")
+        assert status == 200, route
+        assert route["match"] == [{"host": [f"{slug}.{DOMAIN}"]}]
+        assert route["handle"][0]["handler"] == "file_server"
+        assert route["handle"][0]["root"].endswith(f"/{slug}")
+
+        await client.call_tool("delete_website", {"slug": slug})
+
+    def route_is_gone() -> None:
+        status, _ = _admin("GET", f"/id/site:{slug}")
+        assert status == 404, "the deleted site still has a route in caddy"
+
+    # Deletion is a job, so the route leaves a poll or two behind the tool.
+    _wait_for(route_is_gone, "the deleted site's route to leave caddy", timeout=30)
+
+
+async def test_a_lost_route_is_reconciled_by_the_sync():
+    """The safety net: a restarted caddy forgets every site, and gets them back.
+
+    Deleting the route by hand is exactly what a lost autosave does to one
+    site — caddy comes back serving nothing at all. The worker reconciles
+    on its own within five minutes; here the operator's ``cervo-sync``
+    command asks for it now.
+    """
+    slug = unique("resync")
+    async with chat(f"{unique('owner')}@example.com") as client:
+        await client.call_tool("create_website", {"slug": slug})
+        site = await wait_for_deployment(client, slug)
+        assert site["status"] == "live", site
+
+    def is_served() -> None:
+        assert _serves(slug), "the site is not being served yet"
+
+    _wait_for(is_served, "the site to be served", timeout=15)
+
+    status, body = _admin("DELETE", f"/id/site:{slug}")
+    assert status == 200, body
+    assert _admin("GET", f"/id/site:{slug}")[0] == 404
+    assert not _serves(slug), "caddy still serves a site it has no route for"
+
+    assert "caddy sync" in _cervo_sync()
+
+    def republished() -> None:
+        assert _admin("GET", f"/id/site:{slug}")[0] == 200, "the route is still gone"
+        assert _serves(slug), "the route is back but the page is not served"
+
+    _wait_for(republished, "the sync to put the site back", timeout=60)

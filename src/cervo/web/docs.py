@@ -253,8 +253,8 @@ def docs_page() -> HTMLResponse:
                 "Creating a website queues a deployment, which a background "
                 "worker runs as a chain of steps the chat can follow in "
                 "real time: create the site's directory and write the "
-                "default page if none exists, regenerate the web server's "
-                "configuration from the database, and reload it."
+                "default page if none exists, then publish the site's "
+                "route into the web server so the address starts answering."
             ),
             P(
                 "A deployment's status runs pending, then deploying, then "

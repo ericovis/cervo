@@ -6,12 +6,18 @@ There is no shutdown protocol on purpose: a worker killed mid-job leaves the
 job running until its timeout, at which point reaping turns it back into a
 pending attempt.
 
+It is also the only process that talks to caddy, and it only ever does one
+thing there: write the whole config the database describes. Publishing a
+site, deleting one, and reconciling — at startup, every few minutes, and on
+demand (``cervo-sync``) — are all that same :func:`cervo.caddy.sync`.
+
 Tests never start the loop — they call :func:`run_once` and get the same
 behavior deterministically.
 """
 
 import logging
 import shutil
+import sqlite3
 import threading
 from time import monotonic, sleep
 from typing import Any
@@ -23,6 +29,7 @@ from cervo.schema import create_tables
 _POLL_INTERVAL = 2  # seconds
 _PRUNE_INTERVAL = 3600  # seconds between sweeps of old file jobs
 _JOB_RETENTION = 86400  # keep a terminal file job at least a day before pruning
+_SYNC_INTERVAL = 300  # seconds between reconciliations of caddy's config
 
 _log = logging.getLogger(__name__)
 
@@ -42,7 +49,7 @@ def main() -> None:
     )
     monitoring.setup()  # once for the process; a no-op outside production
     create_tables()
-    _heal()  # once, before any thread polls — never concurrently
+    _request_sync()  # once, before any thread polls — never concurrently
     _prune_old_jobs()  # clear any backlog left by a previous run
     threading.current_thread().name = "worker-1"
     for n in range(config.WORKER_CONCURRENCY - 1):
@@ -58,16 +65,20 @@ def run_forever() -> None:
     Daemon threads plus reaper-based recovery are the whole shutdown story
     (see the module docstring), so there is deliberately no graceful-stop hook.
     """
-    last_prune = monotonic()
+    last_prune = last_sync = monotonic()
     while True:
         sleep(_POLL_INTERVAL)
         with connect() as conn:
             reaped = job.reap(conn)
+            stalled = _sync_gave_up(conn)
         if reaped:
             _log.warning("reclaimed %d timed-out job(s)", reaped)
         if monotonic() - last_prune >= _PRUNE_INTERVAL:
             _prune_old_jobs()
             last_prune = monotonic()
+        if stalled or monotonic() - last_sync >= _SYNC_INTERVAL:
+            _request_sync()  # deduped, so every thread asking is harmless
+            last_sync = monotonic()
         while run_once():
             pass
 
@@ -192,16 +203,44 @@ def _write_default_page(site: website.Website) -> None:
     )
 
 
-def _configure_website(claimed: job.Job) -> None:
-    """Render the Caddyfile from the database, covering every site."""
+def _publish_website(claimed: job.Job) -> None:
+    """Make caddy serve what the database says, this site included.
+
+    There is nothing site-specific to do: the config is written whole from
+    the database, so publishing one site is the same call as reconciling
+    every site. A retried step therefore costs caddy nothing (the config
+    already matches, so nothing is written), and a site whose row vanished
+    mid-deployment simply is not in what gets written — the step syncs and
+    succeeds instead of failing for a row it no longer needs.
+    """
+    _sync_caddy_config()
+
+
+def _sync_caddy(claimed: job.Job) -> None:
+    """Reconcile caddy's running config with the database.
+
+    The safety net behind every publish: a caddy that came back with an
+    empty (or stale) autosave gets the whole config rewritten. Cheap when
+    there is nothing to do, which is the normal case.
+    """
+    _sync_caddy_config()
+
+
+def _sync_caddy_config() -> None:
+    """Write caddy's config from the database — the one place that does.
+
+    Read in a fresh connection at job time, so a publish, a deletion, and a
+    reconciliation all act on what the database holds *now* rather than on
+    whatever their payload was queued with.
+    """
     with connect() as conn:
         sites = website.routes(conn)
-    caddy.render(sites)
-
-
-def _activate_website(claimed: job.Job) -> None:
-    """Reload caddy, so it serves what the rendered Caddyfile says."""
-    caddy.reload()
+    rewrote = caddy.sync(sites)
+    _log.info(
+        "caddy %s (%d site(s))",
+        "rewritten" if rewrote else "already in step",
+        len(sites),
+    )
 
 
 def _validate_file(claimed: job.Job) -> None:
@@ -294,24 +333,22 @@ def _delete_file(claimed: job.Job) -> None:
 def _delete_website(claimed: job.Job) -> None:
     """Stop routing a deleted site and remove its files.
 
-    The row is already gone, so rendering the Caddyfile from the database
-    drops the route; the directory is deleted after routing stops. Both
-    steps are idempotent, so a retried deletion is safe. The directory is
-    removed only if the slug is still free — a slug reclaimed before this
-    job runs (its cleanup delayed by a retry, say) keeps the new owner's
-    files, the same guarantee delete_file makes. Reclamation is re-checked
-    right before the removal, not at job start, so a slug re-taken during
-    the caddy reload keeps its fresh files (the check-to-rmtree window is
-    then microseconds, the same accepted window the file jobs carry).
+    Caddy comes first — nothing is served from a directory being deleted —
+    and it needs no argument: the sync reads the database, where the row is
+    already gone, so the route goes with it. A slug freed and re-taken
+    meanwhile is served again by the same call, since the new owner's row
+    is in that same read.
+
+    The files are the part that must be careful. Reclamation is read right
+    before the removal, so a slug taken while caddy was being updated keeps
+    its fresh files (that window is microseconds, the same accepted window
+    the file jobs carry). Both steps are idempotent, so a retried deletion
+    is safe.
     """
     slug = claimed.payload["slug"]
-    with connect() as conn:
-        sites = website.routes(conn)
-    caddy.render(sites)
-    caddy.reload()
-
     site_dir = config.DATA_DIR / slug
-    with connect() as conn:
+    _sync_caddy_config()
+    with connect() as conn:  # the slug may have been taken meanwhile
         reclaimed = website.exists(conn, slug)
     if not reclaimed and site_dir.exists():
         shutil.rmtree(site_dir)
@@ -319,8 +356,8 @@ def _delete_website(claimed: job.Job) -> None:
 
 _HANDLERS = {
     website.PROVISION_KIND: _provision_website,
-    website.CONFIGURE_KIND: _configure_website,
-    website.ACTIVATE_KIND: _activate_website,
+    website.PUBLISH_KIND: _publish_website,
+    website.SYNC_KIND: _sync_caddy,
     website.DELETE_KIND: _delete_website,
     website.DELETE_FILE_KIND: _delete_file,
     website.VALIDATE_FILE_KIND: _validate_file,
@@ -335,33 +372,69 @@ _NEXT = {
 }
 
 
-def _prune_old_jobs() -> None:
-    """Drop terminal file jobs old enough that their payloads are dead weight.
+_PRUNED_KINDS = (*website.FILE_CHAIN, website.SYNC_KIND)
 
-    Only the file-write chain, whose payload carries the file's content; the
-    deploy chain's rows are tiny and carry a site's status, so they stay.
+
+def _prune_old_jobs() -> None:
+    """Drop terminal jobs old enough that keeping them is only dead weight.
+
+    The file-write chain, whose payload carries the file's content, and the
+    reconciliations, which are queued around the clock — the deploy chain's
+    rows are few and tiny and carry a site's status, so they stay.
     """
     try:
         with connect() as conn:
-            removed = job.prune(conn, website.FILE_CHAIN, _JOB_RETENTION)
+            removed = job.prune(conn, _PRUNED_KINDS, _JOB_RETENTION)
         if removed:
-            _log.info("pruned %d old file job(s)", removed)
+            _log.info("pruned %d old job(s)", removed)
     except Exception as error:  # noqa: BLE001 — housekeeping must not kill the loop
         _log.warning("could not prune old jobs: %s", error)
 
 
-def _heal() -> None:
-    """Bring caddy in line with the database at startup.
+def _sync_gave_up(conn: sqlite3.Connection) -> bool:
+    """Whether the last reconciliation spent its attempts without landing.
 
-    Renders the Caddyfile even if no job is queued, so a fresh checkout or a
-    restored data directory starts serving without waiting for a deployment.
-    Failure is only logged — caddy may still be booting — and the next
-    deployment retries the reload anyway.
+    Caddy holds no config of its own, so a sync that never ran is not one
+    site's route missing — it is cervo's whole front door, its own hostname
+    and sign-in pages included. A job's attempts are quickly spent (three,
+    thirty seconds apart) against a caddy that is slow to listen, and
+    waiting out ``_SYNC_INTERVAL`` for the next request would turn that into
+    a five-minute outage. So the loop asks again as soon as it sees one
+    failed: the gap is a poll, not the interval.
+    """
+    latest = job.latest_of(conn, (website.SYNC_KIND,), {})
+    return latest is not None and latest.status == "failed"
+
+
+def _request_sync() -> None:
+    """Ask for caddy's config to be reconciled with the database.
+
+    Queued rather than done here: at startup caddy may still be booting, and
+    the queue's retries are a better answer than logging and hoping. The
+    request is deduped, so the startup call, the periodic one, and every
+    thread doing either add up to a single job.
     """
     try:
         with connect() as conn:
-            sites = website.routes(conn)
-        caddy.render(sites)
-        caddy.reload()
-    except Exception as error:  # noqa: BLE001 — startup must not die on caddy
-        _log.warning("could not sync caddy at startup: %s", error)
+            website.request_sync(conn)
+    except Exception as error:  # noqa: BLE001 — housekeeping must not kill the loop
+        _log.warning("could not queue a caddy sync: %s", error)
+
+
+def sync() -> None:
+    """Reconcile caddy now — the ``cervo-sync`` command, run in a container.
+
+    The operator's escape hatch, for when waiting for the next periodic
+    sync is not an option. It only queues the job (deduped, like every
+    other request); the worker runs it within a poll or two. The tables are
+    created first, so the command works on a host where nothing has run yet
+    instead of failing on a missing table.
+    """
+    create_tables()
+    with connect() as conn:
+        waiting = job.latest_of(conn, (website.SYNC_KIND,), {})
+        queued = website.request_sync(conn)
+    if waiting is not None and waiting.id == queued.id:
+        print(f"a caddy sync is already queued (job {queued.id})")
+    else:
+        print(f"queued caddy sync as job {queued.id}")

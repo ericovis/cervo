@@ -81,10 +81,10 @@ def test_a_permanent_failure_reports_the_content_size_it_sheds(reports):
 async def test_every_processed_job_emits_an_insights_event(insights):
     async with chat() as c:
         await c.call_tool("create_website", {"slug": "metrics"})
-    assert deploy() == 3
+    assert deploy() == 2
 
     processed = [data for kind, data in insights if kind == "job.processed"]
-    assert [p["outcome"] for p in processed] == ["done", "done", "done"]
+    assert [p["outcome"] for p in processed] == ["done", "done"]
     assert {p["slug"] for p in processed} == {"metrics"}
     assert all(p["duration_ms"] >= 0 for p in processed)
 

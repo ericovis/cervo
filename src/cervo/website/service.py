@@ -21,25 +21,33 @@ DELETE_KIND = "website.delete"
 # A deployment is a chain of jobs: each one's success has the worker enqueue
 # the next, so a site's progress is visible one step at a time.
 PROVISION_KIND = "website.provision"
-CONFIGURE_KIND = "website.configure"
-ACTIVATE_KIND = "website.activate"
-DEPLOY_CHAIN = (PROVISION_KIND, CONFIGURE_KIND, ACTIVATE_KIND)
+PUBLISH_KIND = "website.publish"
+DEPLOY_CHAIN = (PROVISION_KIND, PUBLISH_KIND)
+
+# Reconciling caddy's running config with the database: no payload, because
+# it is about every site at once. Queued at the worker's startup, every few
+# minutes after that, and by hand (the ``cervo-sync`` command).
+SYNC_KIND = "website.sync"
+
+# The kinds the chain gained and lost when publishing became one admin-API
+# call instead of rendering and reloading a whole Caddyfile. Renamed on every
+# startup, so a site deployed before the change still reads as live.
+_LEGACY_PUBLISH_KINDS = ("website.configure", "website.activate")
 
 # What each step of the chain is doing, in words fit for a progress report.
 _STEP_LABELS = {
     PROVISION_KIND: "writing the site's files",
-    CONFIGURE_KIND: "updating the web server config",
-    ACTIVATE_KIND: "routing traffic to the site",
+    PUBLISH_KIND: "routing traffic to the site",
 }
 
-# The Caddyfile and caddy itself are shared by every site, so the jobs that
-# rewrite or reload them run one at a time — as a group, so a delete can never
-# render its stale snapshot over a configure that just added another site,
-# however many workers there are.
-_CADDYFILE_GROUP = "caddyfile"
-job.serialize(CONFIGURE_KIND, _CADDYFILE_GROUP)
-job.serialize(ACTIVATE_KIND, _CADDYFILE_GROUP)
-job.serialize(DELETE_KIND, _CADDYFILE_GROUP)
+# Caddy's running config is shared by every site, so the jobs that change it
+# run one at a time — as a group, so a deletion can never race the publish of
+# another site, and a reconciliation can never overwrite either, however many
+# workers there are.
+_CADDY_GROUP = "caddy"
+job.serialize(PUBLISH_KIND, _CADDY_GROUP)
+job.serialize(DELETE_KIND, _CADDY_GROUP)
+job.serialize(SYNC_KIND, _CADDY_GROUP)
 
 # Writing a file into a site is its own chain, so it can grow more steps
 # (a virus scan, say) without touching the queue machinery.
@@ -67,8 +75,9 @@ _ALLOWED_SUFFIXES = frozenset({".html", ".css"})
 _MAX_SITES_PER_USER = 25
 _MAX_FILES_PER_SITE = 100
 
-# DATA_DIR/caddyfile would collide with the rendered DATA_DIR/Caddyfile on a
-# case-insensitive filesystem (macOS development).
+# Reserved when the web server config was a file in DATA_DIR that a site
+# named "caddyfile" could collide with. The file is gone, the reservation
+# stays: the public llms.txt names it, so it is part of the contract.
 _RESERVED = frozenset({"caddyfile"})
 
 # How a chain job's generic status reads as a site's status.
@@ -85,8 +94,17 @@ class WebsiteError(AppError):
 
 
 def create_tables(conn: sqlite3.Connection) -> None:
-    """Create this domain's storage. Safe to call on every startup."""
+    """Create this domain's storage, and bring old deployments up to date.
+
+    Safe to call on every startup, rename included: a database written
+    before publishing became one step holds jobs of the two kinds it
+    replaced, and a site's status is read off the newest job of its chain.
+    Renaming them keeps a live site reading live, and has an in-flight
+    deployment simply re-run the new step.
+    """
     _dao.create_tables(conn)
+    for legacy in _LEGACY_PUBLISH_KINDS:
+        job.rename_kind(conn, legacy, PUBLISH_KIND)
 
 
 def create(conn: sqlite3.Connection, slug: str, owner: User) -> Website:
@@ -143,9 +161,9 @@ def delete(conn: sqlite3.Connection, slug: str, owner: User) -> None:
     """Delete ``owner``'s site and queue the removal of its traces.
 
     The row goes immediately — the slug is free again and the site stops
-    being listed — and a worker job then takes the route out of the
-    Caddyfile and deletes the site's directory. Raises if there is no such
-    site or it belongs to someone else.
+    being listed — and a worker job then takes the site's route out of
+    caddy and deletes its directory. Raises if there is no such site or it
+    belongs to someone else.
     """
     _owned(conn, slug, owner)
     _dao.delete(conn, slug)
@@ -164,8 +182,29 @@ def for_user(conn: sqlite3.Connection, owner: User) -> list[Website]:
 
 
 def routes(conn: sqlite3.Connection) -> list[Route]:
-    """Every site with its owner's email, for the web server's config."""
+    """Every site with its owner's email — the whole of caddy's config.
+
+    What a reconciliation writes: the front door is rebuilt from this list
+    every time, so there is no per-site read to keep in step with it.
+    """
     return _dao.routes(conn)
+
+
+def request_sync(conn: sqlite3.Connection) -> job.Job:
+    """Ask the worker to reconcile caddy's config with the database.
+
+    Deduped: a sync already waiting or running covers whatever prompted
+    this one — the job reads the whole database when it runs — so it is
+    returned instead of queuing a second. That is what lets the startup,
+    the periodic timer, and the manual command all just ask. Best-effort,
+    since the read is not the write's transaction: two threads asking at
+    the very same moment can queue two jobs, which costs one extra
+    reconciliation and nothing else.
+    """
+    current = job.latest_of(conn, (SYNC_KIND,), {})
+    if current is not None and current.status in ("pending", "running"):
+        return current
+    return job.enqueue(conn, SYNC_KIND, {})
 
 
 def live(conn: sqlite3.Connection) -> list[Website]:

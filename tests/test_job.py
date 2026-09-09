@@ -214,8 +214,8 @@ def test_a_serialized_kind_waits_while_one_of_it_runs():
 def test_a_group_serializes_several_kinds_against_each_other():
     """Kinds sharing a group take turns with each other, not just themselves.
 
-    This is what keeps the Caddyfile writers (configure/activate/delete) from
-    running two at once and clobbering each other's snapshot.
+    This is what keeps the writers of caddy's config (publish/delete/sync)
+    from running two at once and clobbering each other's changes.
     """
     job.serialize("tests.group-a", "shared")
     job.serialize("tests.group-b", "shared")
