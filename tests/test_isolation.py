@@ -50,9 +50,9 @@ def test_caddy_is_never_reached(caddy_api):
     fake standing in for it is the whole guarantee.
     """
     assert caddy._api.__name__ == "fake_api"
-    status, servers = caddy._api("GET", "/config/apps/http/servers")
-    assert status == 200 and "srv0" in servers
-    assert ("GET", "/config/apps/http/servers") in caddy_api.calls
+    assert caddy.sync([]) is True  # written into memory, never onto a socket
+    assert ("PUT", "/config/apps") in caddy_api.calls
+    assert caddy_api.object("cervo") is not None
 
 
 def test_honeybadger_is_never_reached(reports):

@@ -3,7 +3,8 @@
 A deployment is a chain of two jobs — provision, then publish — so
 ``deploy()`` runs two jobs for a fresh site, and a failed step retries alone.
 Caddy is the in-memory fake from ``conftest``: its config is what the real
-one would be holding.
+one would be holding, and every job that touches it writes the whole thing
+from the database, so publishing, deleting, and reconciling are one call.
 """
 
 import asyncio
@@ -57,7 +58,9 @@ def test_a_deployment_provisions_the_site(data_dir, caddy_api):
     route = caddy_api.object("site:mysite")
     assert hosts_of(route) == ["mysite.localhost"]
     assert route["handle"] == [{"handler": "file_server", "root": f"{data_dir}/mysite"}]
-    assert route in caddy_api.routes  # appended to the server the apex uses
+    # One server, cervo's own route first and the site's after it.
+    assert caddy_api.routes == [caddy_api.object("cervo"), route]
+    assert caddy_api.apps["http"]["servers"]["cervo"]["listen"] == [":80"]
     assert status_of("mysite") == ("live", None)
 
 
@@ -72,7 +75,7 @@ def test_a_deployment_advances_one_step_at_a_time(data_dir, caddy_api):
     assert (site.status, site.steps_done) == ("deploying", 1)
     assert site.step == "routing traffic to the site"
     assert (data_dir / "stepwise" / "index.html").exists()
-    assert caddy_api.object("site:stepwise") is None
+    assert caddy_api.config is None  # nothing has written caddy's config yet
 
     assert worker.run_once()  # publish
     site = site_of("stepwise")
@@ -91,17 +94,25 @@ def test_every_site_gets_its_own_route(caddy_api):
     assert len(caddy_api.routes) == 3  # the apex proxy is still there too
 
 
-def test_the_apex_proxy_is_never_touched(caddy_api):
-    apex = caddy_api.routes[0]
+def test_the_apex_proxy_leads_every_config(caddy_api):
+    """cervo's own hostname is written with the sites, and always first."""
     created("newcomer")
     deploy()
 
-    assert caddy_api.routes[0] == apex
-    assert "@id" not in apex  # not cervo's to manage: it comes from the file
+    apex = caddy_api.routes[0]
+    assert apex["@id"] == "cervo"
+    assert apex["match"] == [{"host": ["localhost"]}]
+    assert apex["handle"] == [
+        {"handler": "reverse_proxy", "upstreams": [{"dial": "app:8000"}]}
+    ]
 
 
 def test_a_republished_site_writes_nothing(caddy_api):
-    """A retried publish must not cost caddy a config reload."""
+    """A retried publish must not cost caddy a config reload.
+
+    The step writes the whole config, so "already right" is the only thing
+    that can keep it from writing — and it has to be enough.
+    """
     created("settled")
     deploy()
     writes = list(caddy_api.writes)
@@ -134,7 +145,7 @@ def test_a_failed_deployment_records_the_error_and_retries(caddy_api):
 
     status, error = status_of("unlucky")
     assert status == "deploying"  # the failed step is queued for another attempt
-    assert error == "caddy is down"
+    assert "Connection refused" in error  # caddy's own words, not a stack trace
     assert site_of("unlucky").step == "routing traffic to the site"
 
     assert deploy() == 0  # the retry delay has not passed yet
@@ -153,16 +164,21 @@ def test_a_recovered_deployment_goes_live_on_retry(caddy_api):
     assert caddy_api.object("site:recovers") is not None
 
 
-def test_a_publish_without_its_site_fails_and_retries():
-    """A row deleted mid-deployment leaves the step nothing to publish."""
+def test_a_publish_without_its_site_just_syncs(caddy_api):
+    """A row deleted mid-deployment leaves the step nothing site-specific.
+
+    It writes the config the database describes — which no longer mentions
+    that slug — and succeeds, instead of failing over a row it never needed.
+    """
     with connect() as conn:
         job.enqueue(conn, website.PUBLISH_KIND, {"slug": "vanished"})
     assert deploy() == 1
 
     with connect() as conn:
         row = conn.execute("SELECT * FROM job").fetchone()
-    assert row["status"] == "pending"
-    assert "no website row" in row["error"]
+    assert (row["status"], row["error"]) == ("done", None)
+    assert caddy_api.object("site:vanished") is None
+    assert caddy_api.object("cervo") is not None
 
 
 def test_a_job_with_no_handler_fails_cleanly():
@@ -180,7 +196,7 @@ def test_the_worker_asks_for_a_sync_at_startup(caddy_api):
     """Startup queues a reconciliation, so caddy is caught up with no jobs."""
     created("already-there")
     deploy()
-    caddy_api.http()  # caddy restarted: back to the static Caddyfile alone
+    caddy_api.config = None  # caddy restarted with nothing to resume
 
     worker._request_sync()
     assert deploy() == 1
@@ -190,24 +206,58 @@ def test_the_worker_asks_for_a_sync_at_startup(caddy_api):
     ]
 
 
-def test_a_sync_republishes_what_caddy_lost(caddy_api):
+def test_a_sync_that_gave_up_is_asked_for_again(caddy_api):
+    """A front door that never went up must not wait out the sync interval.
+
+    Caddy holds no config of its own, so a reconciliation that spends its
+    attempts against a caddy still booting leaves cervo itself unserved —
+    its own hostname, not one site's route. The polling loop watches for
+    that and asks again, so the gap is a poll rather than ``_SYNC_INTERVAL``.
+    """
+    caddy_api.broken = True
+    with connect() as conn:
+        website.request_sync(conn)
+    for _ in range(3):  # every attempt fails: nothing is listening yet
+        with connect() as conn:  # skip the retry delay, the way waiting would
+            conn.execute("UPDATE job SET next_attempt_at = 0")
+        assert deploy() == 1
+    with connect() as conn:
+        assert conn.execute("SELECT * FROM job").fetchone()["status"] == "failed"
+        assert worker._sync_gave_up(conn)  # what the next poll sees
+
+    caddy_api.broken = False
+    worker._request_sync()  # and what it does about it
+    assert deploy() == 1
+    assert caddy_api.object("cervo") is not None
+    with connect() as conn:
+        assert not worker._sync_gave_up(conn)
+
+
+def test_a_sync_writes_the_whole_tree_into_an_empty_caddy(caddy_api):
+    """A caddy that resumed nothing gets everything, in one write."""
     created("lost")
     deploy()
-    caddy_api.http()
+    caddy_api.config = None
 
     with connect() as conn:
         website.request_sync(conn)
     assert deploy() == 1
 
+    assert caddy_api.writes[-1] == ("PUT", "/config/apps")  # created, not patched
     assert caddy_api.object("site:lost") is not None
-    assert len(caddy_api.routes) == 2  # the apex proxy and the site
+    assert len(caddy_api.routes) == 2  # cervo's own proxy and the site
+
+    writes = list(caddy_api.writes)  # and a second sync has nothing to do
+    with connect() as conn:
+        website.request_sync(conn)
+    assert deploy() == 1
+    assert caddy_api.writes == writes
 
 
 def test_a_sync_drops_a_route_no_site_owns(caddy_api):
     created("real")
     deploy()
     caddy_api.routes.append({"@id": "site:ghost", "match": [{"host": ["ghost"]}]})
-    apex = caddy_api.routes[0]
 
     with connect() as conn:
         website.request_sync(conn)
@@ -215,15 +265,11 @@ def test_a_sync_drops_a_route_no_site_owns(caddy_api):
 
     assert caddy_api.object("site:ghost") is None
     assert caddy_api.object("site:real") is not None
-    assert caddy_api.routes[0] == apex  # what cervo does not own is left alone
+    assert caddy_api.object("cervo") is not None
 
 
 def test_a_sync_of_a_settled_stack_writes_nothing(caddy_api):
-    """Whatever order the sites were published in — a reload costs.
-
-    ``publish`` appends, a sync lists the sites by slug: the two orders
-    serve identically, so a stack in step must compare equal either way.
-    """
+    """The periodic reconciliation's normal case: one read, no reload."""
     created("zeta")
     created("alpha")
     deploy()
@@ -236,41 +282,58 @@ def test_a_sync_of_a_settled_stack_writes_nothing(caddy_api):
     assert caddy_api.writes == writes  # a couple of reads, no reload
 
 
-def test_a_sync_replaces_a_route_an_older_cervo_left(caddy_api):
-    """A rolled-back cervo publishes untagged routes: they are not the apex.
+def test_a_sync_replaces_whatever_caddy_was_running(caddy_api):
+    """The migration: an autosave holding an older cervo's rendered config.
 
-    Adopting one as part of the static front door would leave the site with
-    two routes for good — and the stale one, being first, would keep
-    serving a site after it was deleted.
+    Untagged routes, a server named by the Caddyfile adapter — none of it
+    survives, because the whole apps tree is replaced. Anything left behind
+    would be a second server fighting for the port, or a stale route still
+    serving a deleted site.
     """
     created("veteran")
     deploy()
-    caddy_api.routes[:] = [
-        caddy_api.routes[0],
-        {  # what a rendered Caddyfile POSTed to /load looks like
-            "match": [{"host": ["veteran.localhost"]}],
-            "handle": [{"handler": "file_server", "root": "/mnt/data/veteran"}],
-            "terminal": True,
+    caddy_api.config = {
+        "admin": {"listen": "0.0.0.0:2019"},
+        "apps": {
+            "http": {
+                "servers": {
+                    "srv0": {  # what a rendered Caddyfile POSTed to /load looks like
+                        "listen": [":80"],
+                        "routes": [
+                            {
+                                "match": [{"host": ["veteran.localhost"]}],
+                                "handle": [
+                                    {"handler": "file_server", "root": "/old/veteran"}
+                                ],
+                                "terminal": True,
+                            }
+                        ],
+                    }
+                }
+            }
         },
-    ]
+    }
 
     with connect() as conn:
         website.request_sync(conn)
     assert deploy() == 1
 
-    assert len(caddy_api.routes) == 2  # the apex proxy and one route per site
-    assert caddy_api.object("site:veteran") is not None
-    assert "@id" not in caddy_api.routes[0]  # the apex, still untouched
+    with connect() as conn:
+        sites = website.routes(conn)
+    assert caddy_api.apps == caddy.apps(sites)  # exactly the desired tree
+    assert caddy_api.writes[-1] == ("PATCH", "/config/apps")  # replaced, in one call
+    assert "srv0" not in caddy_api.apps["http"]["servers"]
+    assert caddy_api.config["admin"] == {"listen": "0.0.0.0:2019"}  # not ours
 
 
 def test_a_caddy_that_refuses_says_why(caddy_api):
     """The failed job carries caddy's own words, not a stack trace."""
-    del caddy_api.config["apps"]["http"]  # a caddy booted from another config
+    caddy_api.rejecting = True  # a caddy that will not load what it is given
 
     with pytest.raises(caddy.CaddyError) as refusal:
         caddy.sync([])
 
-    assert "invalid traversal path" in str(refusal.value)
+    assert "this config will not load" in str(refusal.value)
 
 
 def test_a_sync_request_is_deduped():
@@ -397,6 +460,7 @@ def test_a_deletion_removes_the_files_and_the_route(data_dir, caddy_api):
     assert not (data_dir / "doomed").exists()
     assert caddy_api.object("site:doomed") is None
     assert len(caddy_api.routes) == 1  # cervo itself is still served
+    assert caddy_api.routes[0]["@id"] == "cervo"
 
 
 def test_deleting_mid_deployment_leaves_nothing_behind(data_dir, caddy_api):

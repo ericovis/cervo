@@ -55,23 +55,11 @@
         dest: /etc/cervo/env
         mode: "0600"
 
-    # Caddy's entire on-disk config: the global options and the reverse proxy
-    # to cervo itself, parameterised by the environment the quadlet hands the
-    # container. The hosted sites are not in it — the worker publishes those
-    # into the running config over the admin API.
-    - name: Copy the static Caddyfile
-      ansible.builtin.copy:
-        src: "{{ playbook_dir }}/../caddy/Caddyfile"
-        dest: /etc/cervo/Caddyfile
-        mode: "0644"
-      register: caddyfile
-
     - name: Write the quadlet units
       ansible.builtin.template:
         src: "templates/{{ item }}.j2"
         dest: "/etc/containers/systemd/{{ item }}"
         mode: "0644"
-      register: quadlets
       loop:
         - cervo.network
         - cervo-app.container
@@ -106,13 +94,18 @@
         group: "1000"
         recurse: true
 
-    # Earlier versions rendered a Caddyfile into the data volume and had caddy
-    # boot from it. Caddy now boots from /etc/cervo/Caddyfile and nothing
-    # reads the rendered one — leaving it would only confuse the next reader.
-    - name: Remove the Caddyfile earlier versions rendered
+    # Earlier versions gave caddy a config file: one rendered into the data
+    # volume, and later a static one copied to /etc/cervo. Caddy now boots
+    # with no config file at all — the worker writes its whole config over
+    # the admin API — so nothing reads either; leaving them would only
+    # confuse the next reader.
+    - name: Remove the Caddyfiles earlier versions left behind
       ansible.builtin.file:
-        path: "{{ data_volume.stdout }}/Caddyfile"
+        path: "{{ item }}"
         state: absent
+      loop:
+        - "{{ data_volume.stdout }}/Caddyfile"
+        - /etc/cervo/Caddyfile
 
     # A lost container network (a prune while debugging, a backend
     # migration) leaves cervo-network.service "active" while podman knows
@@ -130,30 +123,20 @@
         state: restarted
       when: network_exists.rc == 1
 
-    # Caddy first, and only when its own config changed: a restart brings it
-    # back with the static Caddyfile alone, so every hosted site is unrouted
-    # until the worker syncs it back — a price an ordinary deploy must not
-    # pay. The worker restarts right after in either case, so a bounced caddy
-    # is repopulated within a poll or two.
-    - name: Restart caddy when its unit or its Caddyfile changed
-      ansible.builtin.systemd_service:
-        name: cervo-caddy.service
-        state: restarted
-      when: >-
-        caddyfile is changed
-        or quadlets.results
-           | selectattr("item", "equalto", "cervo-caddy.container")
-           | selectattr("changed")
-           | list | length > 0
-
-    # Worker before app: its startup sync republishes every site from the
-    # database into caddy's running config — the same step that makes a
-    # restarted caddy, and the first deploy of this scheme, need no hand.
+    # Caddy first: --resume brings it back serving exactly what it served, so
+    # the restart costs a second or two of refused connections on :80/:443 and
+    # nothing else — no site is unrouted by it. Then the worker, whose startup
+    # sync rewrites caddy's whole config from the database — which is also the
+    # migration for a caddy whose autosave still holds the old rendered config
+    # (an "srv0" server, untagged site routes): the entire apps tree is
+    # replaced in one call, so nothing old survives it and no two servers can
+    # end up fighting over :443. Then the app.
     - name: Restart the services
       ansible.builtin.systemd_service:
         name: "{{ item }}"
         state: restarted
       loop:
+        - cervo-caddy.service
         - cervo-worker.service
         - cervo-app.service
 

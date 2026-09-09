@@ -12,7 +12,7 @@ Prerequisite: [Docker](https://www.docker.com/) (with Compose).
 bin/dev    # docker compose up -d: app, worker, caddy, mail
 ```
 
-Caddy fronts everything on port 80: the MCP server at `http://localhost/mcp`, and each created site at `http://{slug}.localhost`.
+Caddy fronts everything on port 80: the MCP server at `http://localhost/mcp`, and each created site at `http://{slug}.localhost`. It boots with no config file — on a fresh checkout it serves nothing for a few seconds, until the worker writes its config over the admin API.
 
 Then open Claude Code in this repo — the server is pre-registered in `.mcp.json`, so its tools become available directly in the chat. Connecting runs cervo's OAuth sign-in in the browser: enter an email and type back the code that lands in [mailcatcher](http://localhost:1080) (no real mail is sent in development). Start the stack *before* opening the Claude Code session (connections are made at startup), and run `/mcp` to reconnect whenever you change the MCP server code (`docker compose restart app`) — Claude Code doesn't reconnect automatically.
 
@@ -44,11 +44,11 @@ quadlets](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html)
 (podman ≥ 4.4 — Debian 13). Deploys run from your machine: `bin/deploy`
 builds the image for `linux/amd64`, pushes it to Docker Hub tagged with the
 git sha, and runs the ansible playbook in `deploy/`, which writes the
-quadlet units and environment, copies `caddy/Caddyfile`, pulls the image,
-and restarts the services — the worker republishes every site into caddy on
-startup, so config changes always land. Caddy itself is bounced only when
-its unit or its Caddyfile changed (see [Reconciling
-caddy](#reconciling-caddy)). Secrets never live in the repo: the Docker Hub
+quadlet units and environment, pulls the image, and restarts the services —
+caddy first (it resumes what it was serving), then the worker, whose startup
+sync rewrites caddy's whole config from the database, so config changes
+always land (see [Reconciling caddy](#reconciling-caddy)). Secrets never
+live in the repo: the Docker Hub
 token and SMTP password are read from 1Password by the `op` CLI at deploy
 time.
 
@@ -107,13 +107,20 @@ land in one project.
 
 ### Reconciling caddy
 
-Caddy boots from `caddy/Caddyfile`, checked into the repo: the global
-options and the reverse proxy to cervo itself, and nothing else. Every
-hosted site lives in caddy's *running* config only, put there by the worker
-over the admin API — so a caddy that restarts comes back serving cervo
-alone. That needs no operator: the worker reconciles caddy with the
-database at startup and every five minutes, and the missing sites are back
-by then.
+There is no Caddyfile anywhere. Caddy runs `caddy run --resume`, so it comes
+back holding the config it last saved (in the `caddy-config` volume), and
+everything it serves — cervo's own reverse proxy and every hosted site — is
+written into its *running* config by the worker over the admin API. The
+database is the source of truth; caddy's config is a cache of it.
+
+That needs no operator either way: the worker rewrites caddy's whole config
+from the database at startup and every five minutes, so a caddy that lost
+its autosave is serving again by the next sync — right away when the worker
+restarted with it, within five minutes when caddy bounced alone — and one
+that resumed a stale config has it replaced wholesale. A sync that finds
+nothing listening spends its attempts and fails; the worker sees that on its
+next poll and asks for another, so a slow caddy costs seconds, not the whole
+interval.
 
 To force a reconciliation now, run the `cervo-sync` command inside the
 worker container:
@@ -126,9 +133,10 @@ docker compose exec worker uv run cervo-sync   # in development
 It only queues the job (deduped — a sync already waiting is reused and
 said so); the worker runs it within a poll or two.
 
-The same property sets the deploy order: a caddy restart unroutes every
-site until that sync, so the playbook restarts caddy only when its unit or
-its Caddyfile changed, and always restarts the worker after it.
+The same property sets the deploy order — caddy, then worker, then app: the
+restart costs caddy a second or two of refused connections and no unrouted
+site (`--resume`), and the worker's startup sync brings its config back in
+step right after.
 
 ## Documentation
 

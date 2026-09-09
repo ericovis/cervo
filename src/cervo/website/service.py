@@ -182,17 +182,12 @@ def for_user(conn: sqlite3.Connection, owner: User) -> list[Website]:
 
 
 def routes(conn: sqlite3.Connection) -> list[Route]:
-    """Every site with its owner's email, for the web server's config."""
-    return _dao.routes(conn)
+    """Every site with its owner's email — the whole of caddy's config.
 
-
-def route(conn: sqlite3.Connection, slug: str) -> Route | None:
-    """One site as the web server needs it, or None if there is no such site.
-
-    What the publish step works from: the slug it serves and the owner's
-    email the certificate is registered to.
+    What a reconciliation writes: the front door is rebuilt from this list
+    every time, so there is no per-site read to keep in step with it.
     """
-    return _dao.route(conn, slug)
+    return _dao.routes(conn)
 
 
 def request_sync(conn: sqlite3.Connection) -> job.Job:

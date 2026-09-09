@@ -18,15 +18,13 @@ from tests.conftest import ZEROSSL, deploy
 
 @pytest.fixture
 def https(monkeypatch, caddy_api):
-    """Production's shape: the https scheme, and caddy booted for it.
+    """Production's shape: the https scheme and an operator's ACME contact.
 
-    The static Caddyfile adapts differently under https — the server listens
-    on :443 and the operator's ACME email becomes an automation policy for
-    cervo's own hostname — so the fake is re-seeded to match.
+    Caddy itself needs no re-seeding — it holds whatever cervo last wrote,
+    and under https cervo writes a ``tls`` app alongside the routes.
     """
     monkeypatch.setattr(config, "SCHEME", "https")
     monkeypatch.setattr(config, "ACME_EMAIL", "certs@example.com")
-    caddy_api.https()
     return caddy_api
 
 
@@ -49,21 +47,49 @@ def test_site_urls_carry_the_scheme(https):
 
 
 def test_a_site_is_published_on_the_https_server(https, data_dir):
-    """The server is found by the port it listens on, not by its name."""
+    """The one server cervo writes listens on :443 under https."""
     created("secure")
     deploy()
 
     route = https.object("site:secure")
     assert route["match"] == [{"host": ["secure.localhost"]}]
     assert route in https.routes
-    assert https.server["listen"] == [":443"]
+    assert https.apps["http"]["servers"]["cervo"]["listen"] == [":443"]
+
+
+def test_cervos_own_hostname_carries_the_operators_acme_email(https):
+    """ACME_EMAIL is the contact for cervo's own certificate, and only that."""
+    created("secure")
+    deploy()
+
+    apex = https.policies[0]
+    assert apex["@id"] == "cervo:tls"
+    assert apex["subjects"] == ["localhost"]
+    assert apex["issuers"] == [
+        {"module": "acme", "email": "certs@example.com"},
+        {"module": "acme", "ca": ZEROSSL, "email": "certs@example.com"},
+    ]
+
+
+def test_cervos_policy_names_no_contact_without_an_acme_email(https, monkeypatch):
+    """No contact means no ZeroSSL account to fall back to, so one issuer.
+
+    cervo's own choice, not the retired Caddyfile's: without a global email
+    the adapter emitted no tls app at all. Production always sets
+    ACME_EMAIL, so this is the shape of a misconfigured operator, pinned
+    here so it stays a working single-issuer policy.
+    """
+    monkeypatch.setattr(config, "ACME_EMAIL", "")
+    created("anonymous")
+    deploy()
+
+    assert https.policies[0]["issuers"] == [{"module": "acme"}]
 
 
 def test_each_site_registers_its_owners_acme_email(https):
     """The owner hears from the CA about their own site's certificate.
 
-    Both issuers, as the Caddyfile adapter writes them for cervo's own
-    hostname: a site whose certificate Let's Encrypt cannot issue falls
+    Both issuers: a site whose certificate Let's Encrypt cannot issue falls
     back to the second CA, exactly as it did when a rendered Caddyfile
     carried a ``tls {owner}`` line.
     """
@@ -77,14 +103,13 @@ def test_each_site_registers_its_owners_acme_email(https):
         {"module": "acme", "ca": ZEROSSL, "email": "owner@example.com"},
     ]
 
-    apex, site = https.policies  # cervo's own policy is left exactly as it was
-    assert apex["subjects"] == ["localhost"]
-    assert "@id" not in apex
+    apex, site = https.policies  # cervo's own policy leads, as its route does
+    assert apex["@id"] == "cervo:tls"
     assert site is policy
 
 
-def test_the_certificate_is_ordered_under_the_owners_policy(https):
-    """The policy goes in before the route, and that order is the point.
+def test_the_policies_arrive_with_the_routes(https):
+    """One write carries both, so no hostname is ever routed policy-less.
 
     A hostname becomes caddy's business the moment its route appears, and
     automatic HTTPS orders the certificate on that very reload — with no
@@ -93,40 +118,23 @@ def test_the_certificate_is_ordered_under_the_owners_policy(https):
     created("early")
     deploy()
 
-    writes = [path for _, path in https.writes]
-    assert writes.index("/config/apps/tls/automation/policies") < writes.index(
-        "/config/apps/http/servers/srv0/routes"
-    )
-
-
-def test_a_policy_brings_the_tls_app_with_it(https, caddy_api):
-    """Nothing is assumed about caddy holding a tls app at all.
-
-    Under https this Caddyfile always adapts to one, but a caddy booted
-    from another config is one restart away — and caddy creates no
-    intermediate objects when appending, so the policy has to bring the
-    whole apps.tls → automation → policies path with it.
-    """
-    del caddy_api.config["apps"]["tls"]
-
-    created("lonely")
-    deploy()
-
-    assert caddy_api.policies == [https.object("tls:lonely")]
+    assert https.writes == [("PUT", "/config/apps")]
+    assert https.object("tls:early") is not None
+    assert https.object("site:early") is not None
 
 
 def test_a_sync_puts_back_the_certificate_policies(https):
-    """A restarted caddy loses the sites' policies with their routes."""
+    """A caddy that resumed nothing gets the policies back with the routes."""
     created("restored")
     deploy()
-    https.https()  # caddy restarted: the static Caddyfile alone again
+    https.config = None  # caddy restarted with nothing to resume
 
     with connect() as conn:
         request_sync(conn)
     assert deploy() == 1
 
     apex, site = https.policies
-    assert "@id" not in apex and apex["subjects"] == ["localhost"]
+    assert apex["@id"] == "cervo:tls" and apex["subjects"] == ["localhost"]
     assert site == https.object("tls:restored")
     assert site["issuers"][0]["email"] == "owner@example.com"
 
@@ -140,25 +148,7 @@ def test_a_sync_of_a_settled_stack_leaves_the_policies_alone(https):
         request_sync(conn)
     assert deploy() == 1
 
-    assert https.writes == writes  # three reads, no reload
-
-
-def test_a_sync_survives_a_caddy_with_no_tls_app(https, caddy_api):
-    """Reading the policies must not be the thing that breaks a sync.
-
-    Caddy answers a GET *through* a missing key with a refusal, not with
-    null, so the policies are read through the tls app itself.
-    """
-    created("hopeful")
-    deploy()
-    https.https()
-    del caddy_api.config["apps"]["tls"]  # a caddy booted from another config
-
-    with connect() as conn:
-        request_sync(conn)
-    assert deploy() == 1
-
-    assert caddy_api.policies == [https.object("tls:hopeful")]
+    assert https.writes == writes  # one read, no reload
 
 
 def test_a_republished_site_leaves_its_policy_alone(https):
@@ -188,7 +178,7 @@ def test_plain_http_registers_no_certificate(caddy_api):
     created("plain")
     deploy()
 
-    assert "tls" not in caddy_api.config["apps"]
+    assert "tls" not in caddy_api.apps
     assert caddy_api.object("tls:plain") is None
 
 

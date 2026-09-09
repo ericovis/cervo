@@ -13,22 +13,33 @@ cleanup() {
   exit "$status"
 }
 
-# The static Caddyfile, adapted by the very binary that will run it. The
-# stack below exercises the development shape only, so the production one —
-# https, a real domain, an ACME contact — is checked here or nowhere.
-validate_caddyfile() {
-  docker run --rm \
-    -v "$PWD/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
-    "$@" docker.io/library/caddy:latest \
-    caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+# The config cervo computes for one site, handed to the very binary that will
+# run it. The stack below exercises the development shape only, so the
+# production one — https, a real domain, an ACME contact, and therefore the
+# whole tls app — is checked here or nowhere.
+config_tree='
+import json
+
+from cervo import caddy
+from cervo.website.types import Route
+
+sites = [Route(slug="demo", owner_email="owner@example.com")]
+print(json.dumps({"apps": caddy.apps(sites)}))
+'
+
+validate_config() {
+  compose run --rm --no-deps -T "$@" tests python -c "$config_tree" |
+    docker run --rm -i docker.io/library/caddy:latest \
+      sh -c 'cat > /tmp/apps.json && caddy validate --config /tmp/apps.json'
 }
 
 trap cleanup EXIT  # from here on, every exit tears the stack down
 
-echo "validating caddy/Caddyfile (development)"
-validate_caddyfile
-echo "validating caddy/Caddyfile (production)"
-validate_caddyfile -e SCHEME=https -e DOMAIN=example.com -e ACME_EMAIL=x@example.com
-
 compose build
+
+echo "validating the config cervo writes (development)"
+validate_config
+echo "validating the config cervo writes (production)"
+validate_config -e SCHEME=https -e DOMAIN=example.com -e ACME_EMAIL=x@example.com
+
 compose run --rm smoke

@@ -4,6 +4,9 @@ services:
   tests:
     build: .
     command: pytest
+  # Nothing is bind-mounted in the test stack: code and tests run as baked
+  # into the image, and there is no config file to mount any more.
+  #
   # OAuth issuer URLs must be https or localhost, so the test stack keeps the
   # default DOMAIN=localhost and the smoke runner shares caddy's network
   # namespace: http://localhost reaches the front door, caddy's admin API is
@@ -45,23 +48,22 @@ services:
     image: docker.io/library/caddy:latest
     restart: unless-stopped
     # Unprivileged as in production (the sysctl re-allows :80/:443), state in
-    # /tmp. It boots straight from the repo's static Caddyfile and waits for
-    # nothing: the hosted sites arrive over the admin API. It still starts
-    # after the worker, but only so the cervo image is the one that seeds the
-    # fresh named volume — mounted first by caddy, /mnt/data would be created
+    # /tmp. It boots with no config at all and serves nothing until the
+    # worker's startup sync writes one — exactly as production does. It
+    # starts after the worker so the cervo image is the one that seeds the
+    # fresh named volume: mounted first by caddy, /mnt/data would be created
     # root-owned and locked against every unprivileged container.
     user: "1000:1000"
     sysctls:
       net.ipv4.ip_unprivileged_port_start: 80
+    command: caddy run --resume
     depends_on:
       - worker
     environment:
+      CADDY_ADMIN: 0.0.0.0:2019
       XDG_DATA_HOME: /tmp/caddy
       XDG_CONFIG_HOME: /tmp/caddy
     volumes:
-      # The one bind mount in the test stack: this is configuration, not
-      # code — the very file production mounts, so the suite exercises it.
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - data:/mnt/data
   mail:
     image: docker.io/schickling/mailcatcher:latest

@@ -11,7 +11,8 @@ mailcatcher's API the way a user reads their inbox, the MCP endpoint reached
 with the minted Bearer token, and deployed sites fetched via caddy with a
 Host header. Sharing that namespace also puts caddy's admin API within reach
 at ``http://localhost:2019``, which is how the checks below look at the config
-the worker publishes into — the sites live there, in no file at all.
+the worker writes — cervo's own proxy and every site live there, in no file
+at all.
 """
 
 import asyncio
@@ -112,12 +113,18 @@ def _serves(slug: str) -> bool:
 
 @pytest.fixture(scope="module", autouse=True)
 def front_door():
-    """Wait out the first boot: caddy is up before the app it proxies is."""
+    """Wait out the first boot: caddy comes up serving nothing at all.
+
+    There is no config file — caddy resumes what it last saved, and a fresh
+    stack has nothing to resume — so the apex proxy only exists once the
+    worker's startup sync has written it. That is a boot, a table creation,
+    and a poll away, hence the generous window.
+    """
 
     def answers() -> None:
         assert "cervo" in _get(f"http://{DOMAIN}/")
 
-    _wait_for(answers, "caddy to proxy cervo")
+    _wait_for(answers, "the worker's first sync to put cervo's proxy in caddy", 120)
 
 
 def unique(prefix: str) -> str:
@@ -512,8 +519,18 @@ async def test_an_unknown_subdomain_serves_no_site():
     assert "live on cervo" not in body
 
 
+def test_cervos_own_proxy_is_a_route_in_caddys_running_config():
+    """The apex is written from the database's side too, not from a file."""
+    status, route = _admin("GET", "/id/cervo")
+    assert status == 200, route
+    assert route["match"] == [{"host": [DOMAIN]}]
+    assert route["handle"] == [
+        {"handler": "reverse_proxy", "upstreams": [{"dial": "app:8000"}]}
+    ]
+
+
 async def test_a_live_site_owns_a_route_in_caddys_running_config():
-    """No Caddyfile is rendered: a site is one route object, by id."""
+    """There is no config file anywhere: a site is one route object, by id."""
     slug = unique("routed")
     async with chat(f"{unique('owner')}@example.com") as client:
         await client.call_tool("create_website", {"slug": slug})
@@ -539,10 +556,10 @@ async def test_a_live_site_owns_a_route_in_caddys_running_config():
 async def test_a_lost_route_is_reconciled_by_the_sync():
     """The safety net: a restarted caddy forgets every site, and gets them back.
 
-    Deleting the route by hand is exactly what a caddy restart does to one
-    site — it comes back holding the static Caddyfile alone. The worker
-    reconciles on its own within five minutes; here the operator's
-    ``cervo-sync`` command asks for it now.
+    Deleting the route by hand is exactly what a lost autosave does to one
+    site — caddy comes back serving nothing at all. The worker reconciles
+    on its own within five minutes; here the operator's ``cervo-sync``
+    command asks for it now.
     """
     slug = unique("resync")
     async with chat(f"{unique('owner')}@example.com") as client:

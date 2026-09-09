@@ -48,12 +48,6 @@ FROM website JOIN user ON user.id = website.user_id
 ORDER BY website.slug
 """
 
-_ROUTE = """
-SELECT website.slug, user.email AS owner_email
-FROM website JOIN user ON user.id = website.user_id
-WHERE website.slug = ?
-"""
-
 _DELETE = "DELETE FROM website WHERE slug = ?"
 
 
@@ -117,12 +111,6 @@ def routes(conn: sqlite3.Connection) -> list[Route]:
     """Every site with its owner's email, for the web server's config."""
     rows = conn.execute(_ROUTES).fetchall()
     return [Route(**row) for row in rows]
-
-
-def route(conn: sqlite3.Connection, slug: str) -> Route | None:
-    """One site with its owner's email, if the site exists."""
-    row = conn.execute(_ROUTE, (slug,)).fetchone()
-    return Route(**row) if row else None
 
 
 def delete(conn: sqlite3.Connection, slug: str) -> bool:

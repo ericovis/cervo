@@ -6,8 +6,8 @@ After=network-online.target
 
 [Container]
 Image=docker.io/library/caddy:latest
-# The name is the DNS name on the cervo network: the worker publishes the
-# hosted sites through caddy:2019.
+# The name is the DNS name on the cervo network: the worker writes caddy's
+# whole config through caddy:2019.
 ContainerName=caddy
 Network=cervo.network
 # Unprivileged inside the container (the host-side publish stays podman's);
@@ -17,29 +17,29 @@ Group=1000
 Sysctl=net.ipv4.ip_unprivileged_port_start=80
 PublishPort=80:80
 PublishPort=443:443
-Exec=caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
-# The whole front door on disk: cervo's own hostname and nothing else, copied
-# from the repo's caddy/Caddyfile by the playbook. Every hosted site lives in
-# the running config alone, put there by the worker over the admin API.
-Volume=/etc/cervo/Caddyfile:/etc/caddy/Caddyfile:ro
-# Only the three values the Caddyfile's placeholders read — never the
-# environment file, which also holds the SMTP password and the Honeybadger
-# key. Caddy has no business with either.
-Environment=DOMAIN={{ domain }}
-Environment=SCHEME=https
-Environment=ACME_EMAIL={{ acme_email }}
+# No config file at all: caddy comes back up serving whatever it last saved,
+# and the worker writes the whole config — cervo's own proxy and every
+# hosted site — from the database over the admin API. So caddy needs none of
+# cervo's settings, and never sees the environment file with the SMTP
+# password and the Honeybadger key in it.
+Environment=CADDY_ADMIN=0.0.0.0:2019
+Exec=caddy run --resume
 # The sites' files, served straight from the shared volume.
 Volume=cervo-data:/mnt/data
 # Certificates and the ACME account live in /data — losing it re-issues
-# every certificate and runs into Let's Encrypt rate limits. :U hands the
-# volumes (existing certificates included) to the unprivileged user.
+# every certificate and runs into Let's Encrypt rate limits. /config holds
+# the autosave --resume restores; losing that costs nothing served until the
+# worker's next sync — its startup one after a deploy or a reboot, otherwise
+# the periodic one up to five minutes later, or an operator's `cervo-sync` —
+# but no certificate. :U hands the volumes (existing certificates included)
+# to the unprivileged user.
 Volume=caddy-data:/data:U
 Volume=caddy-config:/config:U
 
 [Service]
-# A restart comes back with the static Caddyfile alone, so every hosted site
-# is unrouted until the worker's next sync puts it back — which is why the
-# playbook restarts caddy only when its unit or its Caddyfile changed.
+# A restart is cheap now: --resume brings the running config back with it, so
+# it costs the seconds caddy takes to come up, and the worker's next sync
+# rewrites the config from the database either way.
 Restart=always
 
 [Install]

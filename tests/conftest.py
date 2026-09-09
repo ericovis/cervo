@@ -3,7 +3,7 @@
 All four guards are autouse, so a test cannot reach real data, a real mail
 server, caddy's admin API, or Honeybadger even by forgetting to ask for a
 fixture. Caddy's is a fake admin API rather than a black hole
-(:class:`FakeCaddy`), so what the worker publishes can be asserted on.
+(:class:`FakeCaddy`), so the config the worker writes can be asserted on.
 
 Auth is enforced at the HTTP layer, so tests talk to the server the way
 Claude does: over its ASGI app, signing in through the real OAuth flow
@@ -16,6 +16,7 @@ import base64
 import hashlib
 import re
 import secrets
+import urllib.error
 from copy import deepcopy
 from dataclasses import dataclass
 from urllib.parse import parse_qs, urlparse
@@ -38,9 +39,9 @@ CALLBACK = "http://localhost:33418/callback"
 
 _ORIGIN = "http://localhost"
 
-# The fallback CA the Caddyfile adapter gives every certificate — asserted
-# on, so a policy cervo writes cannot quietly become worse than the one the
-# static file writes for cervo's own hostname.
+# The fallback CA every certificate gets after Let's Encrypt — asserted on,
+# so a site's policy cannot quietly lose the second chance at issuance that
+# the rendered Caddyfile's ``tls {email}`` used to give it.
 ZEROSSL = "https://acme.zerossl.com/v2/DV90"
 
 
@@ -157,68 +158,39 @@ def no_follow(monkeypatch):
 class FakeCaddy:
     """Caddy's admin API in memory: the config, and how it answers.
 
-    Seeded with exactly what the static ``caddy/Caddyfile`` adapts to, and
-    as strict as the real thing about what it refuses — a 404 for an
-    unknown id, an "invalid traversal path" for a write into a parent that
-    does not exist, and the same for *reading* through one, which only a
-    missing last segment survives — so code that drifts from caddy's
-    semantics fails here rather than in production. Every call is recorded
-    in ``calls``, which is how a test asserts that nothing was written.
+    Starts the way the real one does — ``caddy run --resume`` with nothing
+    saved yet, so there is no config at all — and is as strict as the real
+    thing about what it refuses, on semantics verified against caddy 2.11:
+    reading *through* a key that is not there is a 400 while a missing last
+    segment reads as null, a PUT creates the whole path it is given but is a
+    409 onto a key that already exists, and a PATCH replaces an existing
+    value and refuses a missing parent. Code that drifts from caddy's
+    semantics therefore fails here rather than in production.
+
+    Every call is recorded in ``calls``, which is how a test asserts that a
+    reconciliation wrote nothing at all.
     """
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
-        self.broken = False  # set to make every call fail, as a down caddy does
-        self.http()
-
-    def http(self) -> None:
-        """Seed the config the Caddyfile adapts to under SCHEME=http."""
-        self.config = {
-            "admin": {"listen": "0.0.0.0:2019"},
-            "apps": {
-                "http": {
-                    "servers": {"srv0": {"listen": [":80"], "routes": [_apex_route()]}}
-                }
-            },
-        }
-
-    def https(self, email: str | None = "certs@example.com") -> None:
-        """Seed the config it adapts to under SCHEME=https.
-
-        There is an automation policy for cervo's own hostname either way —
-        with no ``ACME_EMAIL`` the issuers simply carry no email. Note the
-        policy names its subject: cervo's own hostname, not a catch-all,
-        which is what lets sites append theirs. A caddy holding no ``tls``
-        app at all is not a shape this Caddyfile produces under https; a
-        test that wants it deletes the app itself.
-        """
-        self.http()
-        self.server["listen"] = [":443"]
-        issuers = [{"module": "acme"}]  # no contact: the adapter names no CA either
-        if email is not None:
-            issuers = [
-                {"module": "acme", "email": email},
-                {"module": "acme", "ca": ZEROSSL, "email": email},
-            ]
-        self.config["apps"]["tls"] = {
-            "automation": {
-                "policies": [{"subjects": [config.DOMAIN], "issuers": issuers}]
-            }
-        }
+        self.broken = False  # set to refuse every call, as an unreachable caddy does
+        self.rejecting = False  # set to refuse every write, as a bad config is
+        self.config: dict | None = None  # nothing resumed: caddy serves nothing
 
     @property
-    def server(self) -> dict:
-        """The one server the adapter produced."""
-        return self.config["apps"]["http"]["servers"]["srv0"]
+    def apps(self) -> dict:
+        """The tree cervo owns — everything caddy is running."""
+        return (self.config or {})["apps"]
 
     @property
     def routes(self) -> list:
-        return self.server["routes"]
+        """The routes of the one server cervo writes."""
+        return self.apps["http"]["servers"]["cervo"]["routes"]
 
     @property
     def policies(self) -> list:
-        tls = self.config["apps"].get("tls", {})
-        return tls.get("automation", {}).get("policies", [])
+        """The TLS automation policies, which only https puts there."""
+        return self.apps["tls"]["automation"]["policies"]
 
     def object(self, identity: str) -> dict | None:
         """The object carrying this ``@id``, the way caddy finds one."""
@@ -234,7 +206,14 @@ class FakeCaddy:
         """What :func:`cervo.caddy._api` does, without a socket."""
         self.calls.append((method, path))
         if self.broken:
-            raise RuntimeError("caddy is down")
+            # What urllib raises when nothing is listening — the error text
+            # that ends up on the job row in production, so a test asserting
+            # on it reads what an operator would.
+            raise urllib.error.URLError(
+                ConnectionRefusedError(111, "Connection refused")
+            )
+        if self.rejecting and method != "GET":
+            return 500, {"error": "loading new config: this config will not load"}
         if path.startswith("/id/"):
             return self._by_id(method, path[len("/id/") :], body)
         if path == "/config" or path.startswith("/config/"):
@@ -258,7 +237,7 @@ class FakeCaddy:
 
     def _locate(self, identity: str):
         """The container and key of the object with this ``@id``."""
-        stack: list = [self.config]
+        stack: list = [self.config] if self.config is not None else []
         while stack:
             current = stack.pop()
             entries = (
@@ -279,8 +258,8 @@ class FakeCaddy:
         segments = [part for part in path.split("/") if part]
         if method == "GET":
             # Only a missing *last* segment reads as null; a missing one on
-            # the way there is a refusal, which is what makes reading deep
-            # into a config that may not have the path a mistake.
+            # the way there is a refusal — which is the shape a caddy with
+            # no config at all is in, for every path under /config.
             if segments and self._walk(segments[:-1]) is None:
                 return 400, {"error": f"invalid traversal path at: config{path}"}
             return 200, deepcopy(self._walk(segments))
@@ -330,16 +309,20 @@ class FakeCaddy:
         """The value at this config path, or None if nothing is there."""
         current = self.config
         for segment in segments:
-            current = self._child(current, segment)
             if current is None:
                 return None
+            current = self._child(current, segment)
         return current
 
     def _make(self, segments: list[str]):
         """The value at this path, creating what is missing on the way.
 
-        What a PUT does: unlike an append, it brings the whole path with it.
+        What a PUT does: unlike an append, it brings the whole path with
+        it — the config itself included, which is how the very first write
+        into a caddy that resumed nothing lands.
         """
+        if self.config is None:
+            self.config = {}
         current = self.config
         for segment in segments:
             child = self._child(current, segment)
@@ -359,40 +342,14 @@ class FakeCaddy:
         return None
 
 
-def _apex_route() -> dict:
-    """cervo's own route, as the static Caddyfile's reverse_proxy adapts.
-
-    It carries no ``@id``: it is not cervo's to manage at runtime, and every
-    reconciliation must leave it exactly where it is.
-    """
-    return {
-        "match": [{"host": [config.DOMAIN]}],
-        "handle": [
-            {
-                "handler": "subroute",
-                "routes": [
-                    {
-                        "handle": [
-                            {
-                                "handler": "reverse_proxy",
-                                "upstreams": [{"dial": config.MCP_UPSTREAM}],
-                            }
-                        ]
-                    }
-                ],
-            }
-        ],
-        "terminal": True,
-    }
-
-
 @pytest.fixture(autouse=True)
 def caddy_api(monkeypatch) -> FakeCaddy:
     """Answer caddy's admin API from memory instead of over the network.
 
     The whole module goes through ``caddy._api``, so replacing that one
     function is enough to keep every test off the real admin API — and
-    gives tests caddy's config to assert on.
+    gives tests caddy's config to assert on. It starts empty, exactly as a
+    freshly booted caddy with nothing to resume does.
     """
     fake = FakeCaddy()
 

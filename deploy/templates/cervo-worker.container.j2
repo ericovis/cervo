@@ -3,9 +3,9 @@
 Description=cervo — the job worker
 Wants=network-online.target
 After=network-online.target
-# Caddy first: the worker publishes every site into caddy's running config
-# as it starts, and a sync that finds nothing listening spends the job's
-# attempts before the periodic one comes round again.
+# Caddy first: the worker writes caddy's whole config — cervo's own proxy
+# included — as it starts, and a sync that finds nothing listening spends the
+# job's attempts before the loop notices and asks for another.
 After=cervo-caddy.service
 
 [Container]
