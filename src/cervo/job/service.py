@@ -91,6 +91,17 @@ def prune(conn: sqlite3.Connection, kinds: Sequence[str], older_than: float) -> 
     return _dao.prune(conn, kinds, older_than)
 
 
+def rename_kind(conn: sqlite3.Connection, old: str, new: str) -> int:
+    """Re-label every job of kind ``old`` as kind ``new``. Returns how many.
+
+    A migration, for a domain that retired a kind: the rows keep their
+    payload, status, and order, so whatever reads a chain's newest job goes
+    on reading the same history under the surviving name. Idempotent —
+    once renamed, there is nothing left to match.
+    """
+    return _dao.rename_kind(conn, old, new)
+
+
 def latest_of(
     conn: sqlite3.Connection, kinds: Sequence[str], payload: dict[str, Any]
 ) -> Job | None:

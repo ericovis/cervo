@@ -48,7 +48,7 @@ RETURNING *
 # object mapping each serialized kind to its group; a due job of a serialized
 # kind is claimable only while no job sharing its group is running — one
 # statement is what makes "one at a time" hold across any number of workers,
-# and grouping is what lets several kinds (the Caddyfile writers) take turns
+# and grouping is what lets several kinds (caddy's config writers) take turns
 # with each other rather than only with their own kind.
 _CLAIM_DUE = """
 UPDATE job
@@ -129,6 +129,10 @@ WHERE kind IN ({placeholders})
   AND status IN ('done', 'failed')
   AND created_at < ?
 """
+
+# Renaming a kind in place: how a domain migrates jobs whose kind it retired
+# without touching anything else about them.
+_RENAME_KIND = "UPDATE job SET kind = :new WHERE kind = :old"
 
 # The IN () placeholders are filled per call — the number of kinds varies.
 _LATEST_OF = """
@@ -254,6 +258,11 @@ def prune(conn: sqlite3.Connection, kinds: Sequence[str], older_than: float) -> 
     """Delete terminal jobs of ``kinds`` older than ``older_than`` seconds."""
     query = _PRUNE.format(placeholders=",".join("?" * len(kinds)))
     return conn.execute(query, (*kinds, _now() - older_than)).rowcount
+
+
+def rename_kind(conn: sqlite3.Connection, old: str, new: str) -> int:
+    """Give every job of kind ``old`` the kind ``new``. Returns how many."""
+    return conn.execute(_RENAME_KIND, {"old": old, "new": new}).rowcount
 
 
 def latest_of(

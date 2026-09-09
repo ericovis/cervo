@@ -18,9 +18,9 @@ The stack is four services, all sharing the `.data` volume at `/mnt/data`:
 - `worker` — the job worker (`cervo-worker`): one container running
   `WORKER_CONCURRENCY` polling threads (default 1) — claiming is atomic in
   the database, so more threads never double-run a job. Boots first, creates
-  the database tables, and renders the initial Caddyfile (once, before any
-  thread polls).
-- `caddy` — the front door on ports 80/443. Runs on the generated `/mnt/data/Caddyfile` and serves the sites at `http://{slug}.localhost`. Its unauthenticated admin API (`caddy:2019`) is reachable only on the compose network. On a fresh checkout it restarts until the worker first renders the Caddyfile — that's the `restart: unless-stopped` doing its job, not a bug.
+  the database tables, and queues the reconciliation of caddy's config (once,
+  before any thread polls).
+- `caddy` — the front door on ports 80/443. Boots from the static `caddy/Caddyfile` in the repo, mounted read-only at `/etc/caddy/Caddyfile`: cervo's own reverse proxy and nothing else, parameterised by the `DOMAIN`/`SCHEME`/`ACME_EMAIL` it reads from its environment. The hosted sites live only in its *running* config, published there by the worker over its unauthenticated admin API (`caddy:2019`, reachable only on the compose network) and served at `http://{slug}.localhost`. A restarted caddy comes back with the static file alone — the worker's sync puts every site back within five minutes.
 - `mail` — mailcatcher (SMTP on 1025, web UI at http://localhost:1080). Development mail — the sign-in codes — goes here, not to real SMTP.
 
 Every cervo container runs unprivileged inside: the image bakes in a
@@ -42,7 +42,7 @@ than replacing them, so keep it that way or the project lints less than it does 
 
 Settings live in `src/cervo/config.py`. Paths and service addresses are **constants**, not environment variables: the stack always runs from compose, so `/mnt/data` (the shared volume), the database at `/mnt/data/cervo.db`, the MCP bind (`0.0.0.0:8000`), caddy's admin API (`http://caddy:2019`), and the proxy upstream (`app:8000`) are the same everywhere, and an env var would only invite drift. Job tuning (attempts, retry delay, timeout, poll interval) is private module constants for the same reason.
 
-What actually varies between environments is read from the environment / `.env` via python-decouple, with defaults correct for development — no `.env` file is needed in dev:
+What actually varies between environments is read from the environment / `.env` via python-decouple, with defaults correct for development — no `.env` file is needed in dev. The first three are also handed to the `caddy` container, whose Caddyfile reads them as placeholders: the compose file interpolates them once, for all three services, so the front door and the URLs cervo hands out cannot disagree.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -50,7 +50,7 @@ What actually varies between environments is read from the environment / `.env` 
 | `SCHEME` | `http` | `https` in production: caddy then gets a certificate per hostname (persisted in its `/data` volume) and redirects plain http |
 | `ACME_EMAIL` | *(empty)* | ACME contact for cervo's own hostname; each hosted site registers its owner's email instead |
 | `WEB_CONCURRENCY` | `1` | uvicorn worker processes serving `app`; safe to raise — MCP is stateless and SQLite runs in WAL |
-| `WORKER_CONCURRENCY` | `1` | polling threads in the `worker` container; safe to raise — job claiming is atomic and the Caddyfile kinds are serialized |
+| `WORKER_CONCURRENCY` | `1` | polling threads in the `worker` container; safe to raise — job claiming is atomic and the kinds that touch caddy are serialized |
 | `HONEYBADGER_API_KEY` | *(empty)* | Honeybadger project key; empty (dev, tests) disables error reporting and Insights entirely |
 | `HONEYBADGER_ENVIRONMENT` | `development` | environment tag on Honeybadger reports; the production env file sets `production` |
 | `EMAIL_HOST` / `EMAIL_PORT` | `mail` / `1025` | SMTP (the mailcatcher service in dev) |
@@ -114,10 +114,24 @@ Auth has no knobs: token and code lifetimes are private constants in
 - `src/cervo/monitoring.py` — reporting to Honeybadger, production only: the
   ASGI wrap and MCP middleware for the server's errors, `report`/`event` for
   the worker's, and `setup`. Everything is a no-op without the API key.
-- `src/cervo/caddy.py` — rendering the Caddyfile from the database and reloading
-  caddy over its admin API
-- `src/cervo/templates/` — jinja2 templates: the Caddyfile, plus the theme
-  token block (`_tokens.css`) the website's pages inline
+- `src/cervo/caddy.py` — the client for caddy's admin API: `publish` and
+  `unpublish` upsert and drop one site's route (and, under https, its
+  certificate policy, with both issuers the Caddyfile adapter writes —
+  Let's Encrypt and the fallback CA) by the `@id` cervo puts on the objects
+  it owns — `site:{slug}` and `tls:{slug}` — and `sync` reconciles the whole
+  running config with the database. Nothing is written when nothing differs
+  (every write costs caddy a reload), the policy goes in before the route
+  (automatic HTTPS orders the certificate the moment a route appears), what
+  is not cervo's is left exactly in place — the apex proxy from the static
+  file; anything untagged matching a *subdomain* is an older cervo's and is
+  replaced rather than adopted — and every call goes through the one `_api`
+  seam the tests replace
+- `caddy/Caddyfile` — the static front door caddy boots from, the same in
+  development, test and production: the global options and the reverse proxy
+  to `app:8000`, parameterised by `{$DOMAIN}`/`{$SCHEME}`/`{$ACME_EMAIL}`.
+  No hosted site is ever written to it
+- `src/cervo/templates/` — the theme token block (`_tokens.css`) the
+  website's pages inline
 - `src/cervo/__init__.py` — `main()` entrypoint (the `app` service): creates
   the tables, then hands uvicorn the `cervo.asgi:application` import string
 - `src/cervo/asgi.py` — the ASGI app uvicorn's workers import; built with
@@ -126,7 +140,9 @@ Auth has no knobs: token and code lifetimes are private constants in
   (`ENTRYPOINT ["uv", "run"]`)
 - `docker-compose.yml` — the dev environment (see Running);
   `docker-compose.test.yml` — the throwaway test stack (see Tests)
-- `bin/` — the everyday commands: `dev`, `lint`, `test`, `smoke`; plus
+- `bin/` — the everyday commands: `dev`, `lint`, `test`, `smoke` (which
+  first validates `caddy/Caddyfile` in both shapes, dev and production —
+  nothing else exercises the production one); plus
   `brand`, which regenerates the icon set from `src/cervo/brand/mark.svg`
   (needs Chrome; a maintainer's tool, never run by the app, the tests, or CI)
 
@@ -136,6 +152,16 @@ Auth has no knobs: token and code lifetimes are private constants in
 playbook in `deploy/` against the VPS (podman quadlets, secrets from
 1Password at deploy time). See the README's Deploying section for the
 runbook; `deploy/inventory.yml` is gitignored on purpose.
+
+The playbook also copies `caddy/Caddyfile` to `/etc/cervo/Caddyfile`, which
+the caddy quadlet mounts read-only and passes `DOMAIN`, `SCHEME=https` and
+`ACME_EMAIL` through `Environment=` lines — not the environment file, which
+holds the SMTP password and the Honeybadger key. Restart order follows from
+where the hosted sites live: caddy is restarted first but **only when its unit
+or its Caddyfile changed** (a restart unroutes every site until the next
+sync), then the worker, whose startup sync republishes all of them, then the
+app. The worker unit is ordered `After=cervo-caddy.service` for the same
+reason: at boot its startup sync should find a caddy already listening.
 
 When the inventory carries `honeybadger_api_key`, the playbook also turns on
 observability: the key lands in the environment file (enabling error
@@ -181,10 +207,11 @@ one-at-a-time with `job.serialize(kind)` — enforced in the claim statement
 itself, so it holds across any number of worker processes; the domain owning
 the kind declares it at import time. `job.serialize(kind, group)` puts several
 kinds in one group so they take turns with *each other*, not just with their
-own kind — how the three Caddyfile kinds are kept from ever running two at
-once. A claimed job also carries a `claims` generation, bumped on every claim,
-that its worker must still hold to finalize it — so a job reaped after a
-timeout and reclaimed by another worker cannot be mutated by the first.
+own kind — how the three kinds that touch caddy's admin API are kept from
+ever running two at once. A claimed job also carries a `claims` generation,
+bumped on every claim, that its worker must still hold to finalize it — so a
+job reaped after a timeout and reclaimed by another worker cannot be mutated
+by the first.
 
 ## Authentication
 
@@ -224,19 +251,25 @@ users on the public `/docs` page and for operators in the README's
 ## Jobs and deployment
 
 Creating a website inserts the row and enqueues the first job of the deploy
-chain — the MCP server never provisions anything itself. A deployment is three
-chained jobs, and the worker enqueues each next one in the same transaction
-that marks its predecessor done: `website.provision` creates `DATA_DIR/{slug}/`
-and writes the default `index.html` (only if missing — an owner's replaced
-files are never clobbered), `website.configure` regenerates the whole Caddyfile
-from the database, and `website.activate` POSTs it to caddy's `/load` admin
-endpoint. Every step is idempotent, so retrying is always safe — and only the
-failed step retries, not the whole chain. The steps that rewrite or reload
-the shared Caddyfile (`website.configure`, `website.activate`,
-`website.delete`) are serialized as one group — at most one of the three runs
-at a time, however many workers there are — so a delete cannot render its
-stale snapshot over a configure that just added another site, while other
+chain — the MCP server never provisions anything itself. A deployment is two
+chained jobs, and the worker enqueues the second in the same transaction that
+marks the first done: `website.provision` creates `DATA_DIR/{slug}/` and
+writes the default `index.html` (only if missing — an owner's replaced files
+are never clobbered), and `website.publish` puts the site's route — and, under
+https, the certificate policy carrying its owner's email — into caddy's
+running config. Every step is idempotent, so retrying is always safe — and
+only the failed step retries, not the whole chain. The three kinds that talk
+to caddy's admin API (`website.publish`, `website.delete`, `website.sync`) are
+serialized as one group — at most one of them runs at a time, however many
+workers there are — so a reconciliation can never race a publish, while other
 kinds keep flowing around them.
+
+Databases written before the two-step chain still hold `website.configure` and
+`website.activate` rows. `website.create_tables` renames both kinds to
+`website.publish` on every startup (`job.rename_kind`, one idempotent UPDATE),
+so an upgraded instance's live sites keep reading `live` — the renamed row is
+still the newest of the chain — and an in-flight deployment simply re-runs the
+publish step.
 
 Because the deployment is now stepwise, a site also reports `step`,
 `steps_done`, and `steps_total`, and `create_website` streams real-time
@@ -249,9 +282,24 @@ Job lifecycle: `pending → running → done`, or on failure back to `pending` w
 `attempts + 1` and a retry delay, until `failed` for good after `_MAX_ATTEMPTS`.
 A running job that outlives its `timeout` is reaped — counted as a failed attempt
 and made pending again — which is also the crash recovery: a worker killed
-mid-job needs no shutdown protocol. At startup the worker also "heals": it
-renders and reloads the Caddyfile even with no jobs queued, so a fresh checkout
-or restored data directory starts serving immediately.
+mid-job needs no shutdown protocol. At startup the worker also asks for a
+reconciliation instead of doing one inline: caddy may still be booting, and a
+queued job's retries are a better answer than logging and hoping.
+
+That reconciliation, `website.sync`, is the safety net for a config that lives
+only in caddy's memory. `caddy.sync` reads the running routes (and, under
+https, the policies), leaves what is not cervo's exactly where it is (the
+apex proxy from the static Caddyfile), leaves cervo's own objects in place
+when they are already right, appends what is missing and drops what no site
+owns — writing an array only when it really differs, so a stack already in
+step costs a couple of reads (two under http, three under https) and no
+reload at all. The worker requests one at startup and every five minutes
+(`_SYNC_INTERVAL`), and `website.request_sync` dedupes: a sync already pending
+or running is returned rather than queued again, so concurrent threads are
+harmless. An operator can ask for one by hand with `cervo-sync` (`docker
+compose exec worker uv run cervo-sync`, or `podman exec worker uv run
+cervo-sync` in production), which only queues it the same way. Sync rows are
+pruned along with the file-chain rows — 288 a day, otherwise.
 
 Writing a file (`write_file`, owner-only) reuses the same machinery as its
 own chain: the tool fast-fails anything structurally wrong — only relative
@@ -277,14 +325,18 @@ as writing.
 
 Deleting a website (`delete_website`, owner-only) is the mirror image: the
 row is deleted immediately — the slug frees up and the site stops being
-listed — and a `website.delete` job has the worker re-render the Caddyfile
-(dropping the route) and then remove `DATA_DIR/{slug}/`.
+listed — and a `website.delete` job has the worker drop the site's route (and
+its certificate policy) from caddy and then remove `DATA_DIR/{slug}/`. A slug
+taken again in the meantime stops the job before either step: the new owner's
+deployment published the very same route — a route is made of the slug alone —
+and owns the directory.
 
 A site's `status`/`error` shown by the tools comes from the latest job of its
 deploy chain (mid-chain reads as `deploying`; the final job's `done` as
 `live`). Calling `create_website` on
-your own failed site queues a fresh deployment; the slug `caddyfile` is reserved
-(it would collide with `DATA_DIR/Caddyfile` on case-insensitive filesystems).
+your own failed site queues a fresh deployment; the slug `caddyfile` stays
+reserved (nothing collides with it now that no Caddyfile is rendered, but
+`/llms.txt` states the reservation, so it is part of the contract).
 
 ## Tests
 
@@ -294,14 +346,17 @@ bin/smoke   # the whole stack end to end, driven through a real MCP client
 ```
 
 Both run in the throwaway test stack and tear it down afterwards — containers,
-network, and volume — pass or fail (`bin/smoke` rebuilds every image first and
-dumps the stack's logs when it failed). CI runs these same scripts as separate
-steps, so the stacks never race each other.
+network, and volume — pass or fail (`bin/smoke` validates `caddy/Caddyfile` in
+both its shapes, rebuilds every image, and dumps the stack's logs when it
+failed; the validation is the only place the production shape — https, a real
+domain, an ACME contact — is ever exercised). CI runs these same scripts as
+separate steps, so the stacks never race each other.
 
 Tests have their own compose file and project (`cervo-test`) holding the whole
 stack, fully separate from dev: a named volume instead of `./.data`, no source
 bind mounts — code and tests run as baked into the image, so the scripts
-always pass `--build` — and **no published ports**, so it runs side by side
+always pass `--build`; the one bind mount is `caddy/Caddyfile`, which is
+config, not code — and **no published ports**, so it runs side by side
 with the dev stack and there is no way for test and dev data (or ports) to
 collide.
 
@@ -311,13 +366,16 @@ network they cover the whole surface through real clients: every tool listed,
 OAuth metadata advertising CIMD, the whole browser sign-in with the code read
 from mailcatcher's API, the MCP endpoint refusing tokenless requests, slug
 validation and ownership rules, and a site created, polled to `live`, and its
-page actually fetched through caddy. OAuth issuers must be https or
-localhost, so the test stack keeps `DOMAIN=localhost` and the smoke runner
-joins caddy's network namespace (`network_mode: service:caddy`) — and caddy
-is seeded with a stub Caddyfile there so it never crash-loops under the
-runner's feet. The file is intentionally named
-so a plain `pytest` run skips it (it needs the stack up); sites are
-fetched through the front door with a Host header.
+page actually fetched through caddy. Caddy's running config is checked
+directly too: the site's route appears at `/id/site:{slug}` and is gone again
+after `delete_website`, and deleting that route by hand takes the site off the
+air until `cervo-sync` — run in the smoke container, which mounts the data
+volume for it — puts it back and the page is served again. OAuth issuers must
+be https or localhost, so the test stack keeps `DOMAIN=localhost` and the
+smoke runner joins caddy's network namespace (`network_mode: service:caddy`),
+which is also how it reaches the admin API at `http://localhost:2019`. The
+file is intentionally named so a plain `pytest` run skips it (it needs the
+stack up); sites are fetched through the front door with a Host header.
 
 The unit suite is hermetic on top of the stack isolation (see below), so
 `uv run pytest` on the host works too — CI (`.github/workflows/test.yml`)
@@ -327,11 +385,16 @@ every pull request.
 Tests never touch development data or services: autouse fixtures in
 `tests/conftest.py` repoint `config.DATA_DIR` and `config.DATABASE_PATH` at a
 per-test `tmp_path` (creating the tables there), replace `mail.send` with a
-capture list, replace `caddy.reload` the same way, and capture the
+capture list, replace `caddy._api` — the module's one socket — with a
+`FakeCaddy` holding the adapted config in memory, and capture the
 Honeybadger client's sends (`reports`, `insights`) while setting a fake API
 key, so the real reporting paths run without a byte leaving the process. All
 four are autouse — a test cannot escape them by forgetting a fixture — and
-`tests/test_isolation.py` asserts the guarantees hold.
+`tests/test_isolation.py` asserts the guarantees hold. The fake answers like
+the real admin API, refusals included (404 on an unknown `@id`, "invalid
+traversal path" on a write into a missing parent — and on a *read* through
+one, which only a missing last segment survives), and records every call, so
+tests can assert that a settled config is left unwritten.
 
 Write tests against the MCP tools rather than the services. Auth lives in
 the HTTP layer, so the suite runs MCP **over the ASGI app**: `chat(email)`
@@ -355,7 +418,7 @@ The server is registered as a project MCP server in `.mcp.json` at
 tools are available directly in the chat — the primary way to test is to just call
 them and check the results.
 
-- The stack must already be running (`docker compose up -d`) **before starting the Claude Code session** — Claude Code connects to MCP servers at session startup. If tool calls fail to connect, check `docker compose ps` (on a fresh checkout, give the worker a moment to render the Caddyfile so caddy stays up), then run `/mcp` to connect.
+- The stack must already be running (`docker compose up -d`) **before starting the Claude Code session** — Claude Code connects to MCP servers at session startup. If tool calls fail to connect, check `docker compose ps`, then run `/mcp` to connect.
 - Connecting requires OAuth: `/mcp` opens the browser on cervo's sign-in page. Enter any address and read the six-digit code from mailcatcher at http://localhost:1080 — no real mail is sent in development. The connection then stays signed in across restarts of the stack (tokens live in the database volume).
 - Claude Code never reconnects automatically: whenever you change the MCP server code, `docker compose restart app` and run `/mcp` to reconnect. This is mandatory when tool schemas change (names, parameters, docstrings), since tool definitions are cached from the initial handshake; if only a tool's body changed, restarting the service is enough — the next call reaches the fresh process as long as the schema still matches. Worker-side changes (deployments) need only `docker compose restart worker`.
 - For checks the MCP connection can't cover (error cases, raw protocol), use a throwaway `fastmcp.Client` script — pass `auth="oauth"` to run the same browser sign-in, or drive the flow by hand the way `tests/smoke.py` does:

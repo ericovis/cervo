@@ -119,9 +119,10 @@ def test_a_symlink_out_of_the_site_directory_is_caught(data_dir):
         website.file_target("mysite", "link/x.html")
 
 
-async def test_a_submitted_file_is_written_through_the_chain(data_dir, caddy_reloads):
+async def test_a_submitted_file_is_written_through_the_chain(data_dir, caddy_api):
     created("mysite")
     deploy()
+    published = list(caddy_api.writes)
     async with chat() as c:
         result = await c.call_tool(
             "write_file",
@@ -136,7 +137,7 @@ async def test_a_submitted_file_is_written_through_the_chain(data_dir, caddy_rel
     assert (data_dir / "mysite" / "blog" / "post.html").read_text() == HTML
     state = state_of("mysite", "blog/post.html", HTML)
     assert (state.status, state.error) == ("done", None)
-    assert caddy_reloads == [True]  # the site's own deployment; the file adds none
+    assert caddy_api.writes == published  # the file server needs no config change
 
 
 async def test_the_chain_advances_one_step_at_a_time():

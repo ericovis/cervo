@@ -6,8 +6,8 @@ After=network-online.target
 
 [Container]
 Image=docker.io/library/caddy:latest
-# The name is the DNS name on the cervo network: the worker reloads config
-# through caddy:2019.
+# The name is the DNS name on the cervo network: the worker publishes the
+# hosted sites through caddy:2019.
 ContainerName=caddy
 Network=cervo.network
 # Unprivileged inside the container (the host-side publish stays podman's);
@@ -17,7 +17,18 @@ Group=1000
 Sysctl=net.ipv4.ip_unprivileged_port_start=80
 PublishPort=80:80
 PublishPort=443:443
-Exec=caddy run --config /mnt/data/Caddyfile --adapter caddyfile
+Exec=caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+# The whole front door on disk: cervo's own hostname and nothing else, copied
+# from the repo's caddy/Caddyfile by the playbook. Every hosted site lives in
+# the running config alone, put there by the worker over the admin API.
+Volume=/etc/cervo/Caddyfile:/etc/caddy/Caddyfile:ro
+# Only the three values the Caddyfile's placeholders read — never the
+# environment file, which also holds the SMTP password and the Honeybadger
+# key. Caddy has no business with either.
+Environment=DOMAIN={{ domain }}
+Environment=SCHEME=https
+Environment=ACME_EMAIL={{ acme_email }}
+# The sites' files, served straight from the shared volume.
 Volume=cervo-data:/mnt/data
 # Certificates and the ACME account live in /data — losing it re-issues
 # every certificate and runs into Let's Encrypt rate limits. :U hands the
@@ -26,8 +37,9 @@ Volume=caddy-data:/data:U
 Volume=caddy-config:/config:U
 
 [Service]
-# On a fresh server caddy restarts until the worker's first heal renders
-# the Caddyfile — the same pattern as development.
+# A restart comes back with the static Caddyfile alone, so every hosted site
+# is unrouted until the worker's next sync puts it back — which is why the
+# playbook restarts caddy only when its unit or its Caddyfile changed.
 Restart=always
 
 [Install]

@@ -1,7 +1,16 @@
+# The settings the front door and cervo itself must agree on: caddy binds
+# them, cervo builds its URLs from them. Read from the host environment (or
+# a .env file) in one place, so a DOMAIN set for one is set for all three.
+x-site: &site
+  DOMAIN: ${DOMAIN:-localhost}
+  SCHEME: ${SCHEME:-http}
+  ACME_EMAIL: ${ACME_EMAIL:-}
+
 services:
   app:
     build: .
     restart: unless-stopped
+    environment: *site
     volumes:
       - .data:/mnt/data
       - ./src:/app/src
@@ -13,26 +22,32 @@ services:
     build: .
     command: cervo-worker
     restart: unless-stopped
+    environment: *site
     volumes:
       - .data:/mnt/data
       - ./src:/app/src
   caddy:
     image: docker.io/library/caddy:latest
-    command: caddy run --config /mnt/data/Caddyfile --adapter caddyfile
     restart: unless-stopped
     # Unprivileged inside the container; the sysctl lets it still bind :80
     # and :443. Its state goes to /tmp — development keeps no certificates.
     user: "1000:1000"
     sysctls:
       net.ipv4.ip_unprivileged_port_start: 80
+    # Caddy boots from the static Caddyfile in the repo — cervo's own reverse
+    # proxy and nothing else — and learns about hosted sites from the worker
+    # over its admin API. The placeholders in that file read the same three
+    # settings cervo does, so the front door and the URLs it hands out agree.
     environment:
+      <<: *site
       XDG_DATA_HOME: /tmp/caddy
       XDG_CONFIG_HOME: /tmp/caddy
     ports:
       - 80:80
       - 443:443
     volumes:
-      - .data:/mnt/data
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - .data:/mnt/data  # the sites' files, served straight off the volume
   mail:
     image: docker.io/schickling/mailcatcher:latest
     ports:

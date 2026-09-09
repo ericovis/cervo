@@ -3,6 +3,10 @@
 Description=cervo — the job worker
 Wants=network-online.target
 After=network-online.target
+# Caddy first: the worker publishes every site into caddy's running config
+# as it starts, and a sync that finds nothing listening spends the job's
+# attempts before the periodic one comes round again.
+After=cervo-caddy.service
 
 [Container]
 Image={{ image_repo }}:{{ image_tag }}

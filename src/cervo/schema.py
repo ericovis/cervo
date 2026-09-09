@@ -11,6 +11,6 @@ def create_tables() -> None:
     """Create every table the app needs. Safe to call on every startup."""
     with connect() as conn:
         user.create_tables(conn)  # website references it, so it goes first
+        job.create_tables(conn)  # website migrates job rows, so it goes next
         website.create_tables(conn)
         auth.create_tables(conn)
-        job.create_tables(conn)

@@ -12,7 +12,23 @@ cleanup() {
   compose down -v --remove-orphans
   exit "$status"
 }
-trap cleanup EXIT
+
+# The static Caddyfile, adapted by the very binary that will run it. The
+# stack below exercises the development shape only, so the production one —
+# https, a real domain, an ACME contact — is checked here or nowhere.
+validate_caddyfile() {
+  docker run --rm \
+    -v "$PWD/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+    "$@" docker.io/library/caddy:latest \
+    caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+}
+
+trap cleanup EXIT  # from here on, every exit tears the stack down
+
+echo "validating caddy/Caddyfile (development)"
+validate_caddyfile
+echo "validating caddy/Caddyfile (production)"
+validate_caddyfile -e SCHEME=https -e DOMAIN=example.com -e ACME_EMAIL=x@example.com
 
 compose build
 compose run --rm smoke

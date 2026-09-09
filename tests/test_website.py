@@ -28,7 +28,7 @@ async def test_the_owner_comes_from_the_session():
         "error": None,
         "step": "writing the site's files",
         "steps_done": 0,
-        "steps_total": 3,
+        "steps_total": 2,
         "url": "http://alices-site.localhost",
     }
 
@@ -80,7 +80,7 @@ async def test_dns_safe_slugs_are_accepted(slug):
         "\u0430dmin",  # cyrillic a (U+0430), a homoglyph of ascii 'a'
         "site.com",  # a dot would spill into another subdomain label
         "site/../etc",  # path characters
-        "site\nname",  # a newline that could smuggle into the Caddyfile
+        "site\nname",  # a newline that could smuggle into the server's config
         "site name",
     ],
 )
@@ -206,7 +206,7 @@ def test_creating_a_site_queues_the_first_step_of_the_chain():
 
     assert site.status == "pending"
     assert site.step == "writing the site's files"
-    assert (site.steps_done, site.steps_total) == (0, 3)
+    assert (site.steps_done, site.steps_total) == (0, 2)
     assert deployment is not None
     assert deployment.status == "pending"
     assert queued == 1  # later steps are queued by the worker, one at a time
@@ -235,7 +235,7 @@ def test_a_live_site_is_not_deployed_again():
     with connect() as conn:
         with pytest.raises(website.WebsiteError, match="live"):
             website.create(conn, "settled", owner)
-        assert conn.execute("SELECT count(*) c FROM job").fetchone()["c"] == 3
+        assert conn.execute("SELECT count(*) c FROM job").fetchone()["c"] == 2
 
 
 def test_a_site_cannot_point_at_a_user_who_does_not_exist():

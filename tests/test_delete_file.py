@@ -75,12 +75,12 @@ async def test_deleting_a_file_that_does_not_exist_is_refused():
             await call(c, "delete_file", slug="mysite", path="ghost.html")
 
 
-async def test_a_written_file_is_deleted_through_the_chain(data_dir, caddy_reloads):
+async def test_a_written_file_is_deleted_through_the_chain(data_dir, caddy_api):
     created("mysite")
     deploy()
     await write("mysite", "blog/post.html")
     assert (data_dir / "mysite" / "blog" / "post.html").exists()
-    reloads_before = list(caddy_reloads)
+    published = list(caddy_api.writes)
 
     async with chat() as c:
         result = await c.call_tool(
@@ -96,7 +96,7 @@ async def test_a_written_file_is_deleted_through_the_chain(data_dir, caddy_reloa
     assert (data_dir / "mysite" / "index.html").exists()  # the site itself stays
     state = state_of("mysite", "blog/post.html", owner_id())
     assert (state.status, state.error) == ("done", None)
-    assert caddy_reloads == reloads_before  # no reload: the file server notices
+    assert caddy_api.writes == published  # no config change: the file server notices
 
 
 async def test_deleting_a_custom_index_restores_the_default_page(data_dir):

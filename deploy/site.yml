@@ -55,11 +55,23 @@
         dest: /etc/cervo/env
         mode: "0600"
 
+    # Caddy's entire on-disk config: the global options and the reverse proxy
+    # to cervo itself, parameterised by the environment the quadlet hands the
+    # container. The hosted sites are not in it — the worker publishes those
+    # into the running config over the admin API.
+    - name: Copy the static Caddyfile
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../caddy/Caddyfile"
+        dest: /etc/cervo/Caddyfile
+        mode: "0644"
+      register: caddyfile
+
     - name: Write the quadlet units
       ansible.builtin.template:
         src: "templates/{{ item }}.j2"
         dest: "/etc/containers/systemd/{{ item }}"
         mode: "0644"
+      register: quadlets
       loop:
         - cervo.network
         - cervo-app.container
@@ -94,6 +106,14 @@
         group: "1000"
         recurse: true
 
+    # Earlier versions rendered a Caddyfile into the data volume and had caddy
+    # boot from it. Caddy now boots from /etc/cervo/Caddyfile and nothing
+    # reads the rendered one — leaving it would only confuse the next reader.
+    - name: Remove the Caddyfile earlier versions rendered
+      ansible.builtin.file:
+        path: "{{ data_volume.stdout }}/Caddyfile"
+        state: absent
+
     # A lost container network (a prune while debugging, a backend
     # migration) leaves cervo-network.service "active" while podman knows
     # nothing of it — and then no container can start. Recreate it before
@@ -110,16 +130,31 @@
         state: restarted
       when: network_exists.rc == 1
 
-    # Worker first: its startup heal re-renders the Caddyfile from the
-    # database with the freshly deployed template. Caddy after, so it reads
-    # the new file even when the reload API was not up during the heal.
+    # Caddy first, and only when its own config changed: a restart brings it
+    # back with the static Caddyfile alone, so every hosted site is unrouted
+    # until the worker syncs it back — a price an ordinary deploy must not
+    # pay. The worker restarts right after in either case, so a bounced caddy
+    # is repopulated within a poll or two.
+    - name: Restart caddy when its unit or its Caddyfile changed
+      ansible.builtin.systemd_service:
+        name: cervo-caddy.service
+        state: restarted
+      when: >-
+        caddyfile is changed
+        or quadlets.results
+           | selectattr("item", "equalto", "cervo-caddy.container")
+           | selectattr("changed")
+           | list | length > 0
+
+    # Worker before app: its startup sync republishes every site from the
+    # database into caddy's running config — the same step that makes a
+    # restarted caddy, and the first deploy of this scheme, need no hand.
     - name: Restart the services
       ansible.builtin.systemd_service:
         name: "{{ item }}"
         state: restarted
       loop:
         - cervo-worker.service
-        - cervo-caddy.service
         - cervo-app.service
 
     # Everything below needs the Honeybadger project key and is skipped

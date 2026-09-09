@@ -5,8 +5,6 @@ ruff's TID251 rule enforces it. Callers go through the service.
 """
 
 from cervo.website.service import (
-    ACTIVATE_KIND,
-    CONFIGURE_KIND,
     DELETE_FILE_CHAIN,
     DELETE_FILE_KIND,
     DELETE_KIND,
@@ -14,6 +12,8 @@ from cervo.website.service import (
     FILE_CHAIN,
     MAX_FILE_BYTES,
     PROVISION_KIND,
+    PUBLISH_KIND,
+    SYNC_KIND,
     VALIDATE_FILE_KIND,
     WRITE_FILE_KIND,
     WebsiteError,
@@ -29,6 +29,8 @@ from cervo.website.service import (
     for_user,
     get,
     live,
+    request_sync,
+    route,
     routes,
     submit_file,
     submit_file_deletion,
@@ -45,8 +47,6 @@ from cervo.website.types import (
 )
 
 __all__ = [
-    "ACTIVATE_KIND",
-    "CONFIGURE_KIND",
     "DELETE_FILE_CHAIN",
     "DELETE_FILE_KIND",
     "DELETE_KIND",
@@ -54,6 +54,8 @@ __all__ = [
     "FILE_CHAIN",
     "MAX_FILE_BYTES",
     "PROVISION_KIND",
+    "PUBLISH_KIND",
+    "SYNC_KIND",
     "VALIDATE_FILE_KIND",
     "WRITE_FILE_KIND",
     "FileDeletion",
@@ -77,6 +79,8 @@ __all__ = [
     "for_user",
     "get",
     "live",
+    "request_sync",
+    "route",
     "routes",
     "submit_file",
     "submit_file_deletion",

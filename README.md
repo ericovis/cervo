@@ -44,10 +44,13 @@ quadlets](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html)
 (podman ≥ 4.4 — Debian 13). Deploys run from your machine: `bin/deploy`
 builds the image for `linux/amd64`, pushes it to Docker Hub tagged with the
 git sha, and runs the ansible playbook in `deploy/`, which writes the
-quadlet units and environment, pulls the image, and restarts the services —
-restarting the worker re-renders the Caddyfile, so config changes always
-land. Secrets never live in the repo: the Docker Hub token and SMTP
-password are read from 1Password by the `op` CLI at deploy time.
+quadlet units and environment, copies `caddy/Caddyfile`, pulls the image,
+and restarts the services — the worker republishes every site into caddy on
+startup, so config changes always land. Caddy itself is bounced only when
+its unit or its Caddyfile changed (see [Reconciling
+caddy](#reconciling-caddy)). Secrets never live in the repo: the Docker Hub
+token and SMTP password are read from 1Password by the `op` CLI at deploy
+time.
 
 One-time setup:
 
@@ -101,6 +104,31 @@ With `honeybadger_api_key` set, the playbook also installs
 Honeybadger Insights, and reports each deploy (with its exact commit sha)
 to Honeybadger — errors, request and job telemetry, logs, and deploys all
 land in one project.
+
+### Reconciling caddy
+
+Caddy boots from `caddy/Caddyfile`, checked into the repo: the global
+options and the reverse proxy to cervo itself, and nothing else. Every
+hosted site lives in caddy's *running* config only, put there by the worker
+over the admin API — so a caddy that restarts comes back serving cervo
+alone. That needs no operator: the worker reconciles caddy with the
+database at startup and every five minutes, and the missing sites are back
+by then.
+
+To force a reconciliation now, run the `cervo-sync` command inside the
+worker container:
+
+```bash
+podman exec worker uv run cervo-sync           # on the VPS
+docker compose exec worker uv run cervo-sync   # in development
+```
+
+It only queues the job (deduped — a sync already waiting is reused and
+said so); the worker runs it within a poll or two.
+
+The same property sets the deploy order: a caddy restart unroutes every
+site until that sync, so the playbook restarts caddy only when its unit or
+its Caddyfile changed, and always restarts the worker after it.
 
 ## Documentation
 
